@@ -39,11 +39,14 @@ All success responses use `{"success": true, "data": ...}`. Errors use:
 | Method | Route | Bearer token | Camera | Purpose |
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/health` | No | No | Check that the local API initialized |
+| GET | `/api/v1/station/preview` | No | Yes | Return one uncached local JPEG with the item ROI overlay |
 | POST | `/api/v1/station/identify` | No | Yes | Capture locally, identify one enrolled user, and issue a token |
 | POST | `/api/v1/station/enroll` | No | Yes | Capture several face poses, create a local user, and issue a token |
 | POST | `/api/v1/station/inspect` | Yes | Yes | Recheck the same user and inspect one item without changing inventory |
 | POST | `/api/v1/station/operate` | Yes | No | Explicitly confirm one unexpired inspection and atomically change inventory |
-| GET | `/api/v1/inventory` | Yes | No | Return the current identified user's present SQLite inventory |
+| GET | `/api/v1/members` | Yes | No | List other registered users available as explicit share recipients |
+| GET | `/api/v1/inventory` | Yes | No | Return present items the current user owns or may access through sharing |
+| GET | `/api/v1/history` | Yes | No | Return the current identified user's recent local interaction events |
 | POST | `/api/v1/questions` | Yes | No | Retrieve inventory-aware FoodKeeper/Markdown passages |
 | POST | `/api/v1/recipes/recommend` | Yes | No | Rank local recipes using the user's inventory and near-expiry items |
 
@@ -74,6 +77,14 @@ Recipe JSON is loaded from `FRIDGE_RECIPE_DIR` when set, otherwise from
 
 If real startup cannot open the database, models, or camera, the server does not
 become healthy.
+
+## `GET /api/v1/station/preview`
+
+Returns one `image/jpeg` snapshot from the same Python-owned camera used by
+identify, enroll, and inspect. The backend draws the exact configured item ROI
+in green and sets `Cache-Control: no-store`. The snapshot is serialized with
+other station camera operations, remains local to the loopback API, is not
+persisted, and is not sent to the Item Vision sidecar or Manta.
 
 ## `POST /api/v1/station/identify`
 
@@ -148,6 +159,7 @@ Header: `Authorization: Bearer <access_token>`.
   "selected_item_id": null,
   "add_as_new": true,
   "shared": false,
+  "shared_user_ids": ["opaque-recipient-user-id"],
   "expires_on": "2026-09-22"
 }
 ```
@@ -155,12 +167,17 @@ Header: `Authorization: Bearer <access_token>`.
 `label` is user-reviewed, required for put-in, trimmed, and limited to 200
 characters. Category suggestions and edited labels never choose `item_id`.
 For `MATCHED`, `AMBIGUOUS`, and `NO_MATCH`, the user may choose an eligible
-offered item or explicitly set `add_as_new`; the browser defaults `MATCHED` to
-the best eligible candidate and `NO_MATCH` to a new item. If no eligible
-candidate remains after filtering, the browser defaults to a new item. When
+offered item or explicitly set `add_as_new`. The browser defaults every PUT_IN
+to `add_as_new` because visually identical products may be separate physical
+units; an eligible historical item can still be selected explicitly. If no
+eligible candidate remains after filtering, adding a new item remains
+available. When
 `add_as_new` is true, `selected_item_id` must be null and the backend creates
 the opaque ID. DINOv2 crop and ROI templates are saved under that final item
-ID. `expires_on` may be `null`; `shared` defaults to `false`.
+ID. `expires_on` may be `null`; `shared` defaults to `false`. The browser uses
+`shared_user_ids` for selected recipients. The backend rejects unknown IDs,
+the owner, or a request that combines selected recipients with legacy
+all-member `shared=true` access.
 
 ### TAKE_OUT request
 
@@ -180,11 +197,26 @@ never identify a take-out item. If the snapshot is empty, inspection returns a
 non-committable `NO_AUTHORIZED_ITEMS` review state and no inventory mutation is
 possible.
 
+If the top-ranked `MATCHED` or `AMBIGUOUS` result points to another user's
+present private item, the unauthorized row remains filtered out and the inspection returns
+`review_state` and `review_decision` as `WARN_NOT_OWNER`. Local feedback plays
+the warning tone immediately. The item remains present; the user may only
+correct the AI result by choosing a different item from the authorization-
+filtered snapshot. If that snapshot is empty, confirmation stays disabled.
+
 The commit rejects missing confirmation, unknown/expired/used inspections,
 action or identity mismatch, arbitrary IDs, stale inventory, and unauthorized
 choices. The selected row is rechecked for presence and authorization at commit
 time. A successful inspection is consumed once. Failed validation does not
 pretend that inventory changed.
+
+## `GET /api/v1/history`
+
+Header: `Authorization: Bearer <access_token>`. Returns at most 50 relevant
+local interaction events for the signed-in user, newest first. Normal events
+remain private to the acting user. A blocked `WARN_NOT_OWNER` take-out is
+recorded for both the actor and the item owner so each sees the same denied
+physical interaction; it does not mutate inventory.
 
 ### Operation response
 
@@ -230,7 +262,9 @@ Header: `Authorization: Bearer <access_token>`.
         "item_id": "opaque-item-id",
         "label": "milk",
         "owner_id": "opaque-user-id",
-        "shared": 0,
+        "owner_name": "Enoch",
+        "shared": 1,
+        "access_type": "SHARED_DIRECT",
         "put_at": "2026-09-19T08:08:00+00:00",
         "expires_on": "2026-09-22"
       }
@@ -239,8 +273,14 @@ Header: `Authorization: Bearer <access_token>`.
 }
 ```
 
-The current `FridgeService` returns present items owned by the identified user.
-It does not expose biometric templates, raw images, removed records, or events.
+The browser groups rows only for display when owner, normalized label, and
+sharing mode match. The count represents distinct opaque `item_id` rows; item
+identity and instance embeddings remain separate in SQLite.
+
+The current `FridgeService` returns present items owned by the identified user,
+shared with all users by legacy data, or explicitly shared with the identified
+user through `item_shares`. It does not expose biometric templates, raw images,
+or removed records.
 
 ## `POST /api/v1/questions`
 

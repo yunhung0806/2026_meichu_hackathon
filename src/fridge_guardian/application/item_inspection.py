@@ -25,6 +25,7 @@ from fridge_guardian.domain import (
     FrameSample,
     IdentityResult,
     IdentityStatus,
+    InteractionEvent,
 )
 
 
@@ -57,6 +58,8 @@ class PendingInspection:
     created_at: datetime
     expires_at: datetime
     committable: bool
+    review_decision: DecisionCode | None = None
+    review_message: str | None = None
     consumed: bool = False
 
 
@@ -106,6 +109,9 @@ class ItemInspectionManager:
         eligible_candidates = self._eligible_candidates(
             action, login.user_id, instance.get("candidates", [])
         )
+        private_owner_match = self._private_owner_match(
+            action, login.user_id, instance
+        )
         authorized_inventory = (
             tuple(self._authorized_inventory(login.user_id))
             if action is Action.TAKE_OUT
@@ -134,9 +140,22 @@ class ItemInspectionManager:
             created_at=now,
             expires_at=now + self.ttl,
             committable=committable,
+            review_decision=(
+                DecisionCode.WARN_NOT_OWNER if private_owner_match else None
+            ),
+            review_message=(
+                "WARN_NOT_OWNER: AI matched a private item owned by another user. It cannot be "
+                "removed. If the AI result is wrong, choose another authorized item."
+                if private_owner_match
+                else None
+            ),
         )
         self._discard_expired(now)
         self.pending[inspection_id] = pending
+        if private_owner_match:
+            self._publish_private_owner_warning(
+                pending, private_owner_match
+            )
         return self._public(pending, login.display_name, result.get("latency_ms", {}))
 
     def commit(
@@ -151,6 +170,7 @@ class ItemInspectionManager:
         add_as_new: bool,
         shared: bool,
         expires_on: date | None,
+        shared_user_ids: Sequence[str] = (),
     ) -> OperationResult:
         login = self.service._login(token)
         pending = self.pending.get(inspection_id)
@@ -197,6 +217,7 @@ class ItemInspectionManager:
                 add_as_new,
                 shared,
                 expires_on,
+                shared_user_ids,
             )
         else:
             result = self._commit_take(pending, selected_item_id)
@@ -223,6 +244,7 @@ class ItemInspectionManager:
         add_as_new: bool,
         shared: bool,
         expires_on: date | None,
+        shared_user_ids: Sequence[str],
     ) -> OperationResult:
         clean_label = (label or "").strip()
         if not clean_label or len(clean_label) > 200:
@@ -231,6 +253,9 @@ class ItemInspectionManager:
             raise InspectionError("VALIDATION_ERROR", "shared must be a boolean.")
         if expires_on is not None and type(expires_on) is not date:
             raise InspectionError("VALIDATION_ERROR", "expires_on must be a date or null.")
+        share_ids = self._validate_share_users(
+            pending.user_id, shared, shared_user_ids
+        )
 
         allowed = {candidate["item_id"] for candidate in pending.candidates}
         status = pending.instance_status
@@ -279,6 +304,13 @@ class ItemInspectionManager:
                    ON CONFLICT(item_id) DO UPDATE SET shared=excluded.shared,
                    put_at=excluded.put_at, expires_on=excluded.expires_on, present=1""",
                 (item_id, int(shared), now, expires_on.isoformat() if expires_on else None),
+            )
+            self.repo.connection.execute(
+                "DELETE FROM item_shares WHERE item_id=?", (item_id,)
+            )
+            self.repo.connection.executemany(
+                "INSERT INTO item_shares(item_id, user_id, created_at) VALUES (?, ?, ?)",
+                [(item_id, user_id, now) for user_id in share_ids],
             )
         decision = self._decision(
             pending,
@@ -413,6 +445,126 @@ class ItemInspectionManager:
                 )
         return eligible
 
+    def _private_owner_match(
+        self,
+        action: Action,
+        user_id: str,
+        instance: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return a top-ranked private-owner match without exposing it as a choice.
+
+        An AMBIGUOUS result can still be a useful safety signal: duplicate-looking
+        items often make the instance margin too small for MATCHED, but the
+        highest-ranked candidate may still be another user's private present item.
+        The warning never authorizes or mutates that item.
+        """
+        if action is not Action.TAKE_OUT or instance.get("status") not in {
+            "MATCHED",
+            "AMBIGUOUS",
+        }:
+            return None
+        candidates = instance.get("candidates", [])
+        if not candidates:
+            return None
+        candidate = candidates[0]
+        item_id = str(candidate.get("item_id", ""))
+        item, state = self._present_item(item_id)
+        if (
+            item is None
+            or state is None
+            or not state["present"]
+            or self._authorized(item.owner_id, state, user_id, item_id)
+        ):
+            return None
+        return {"item_id": item_id, "similarity": float(candidate["similarity"])}
+
+    def _publish_private_owner_warning(
+        self,
+        pending: PendingInspection,
+        candidate: dict[str, Any],
+    ) -> None:
+        identity = pending.identity
+        decision = Decision(
+                    session_id=pending.session_id,
+                    action=Action.TAKE_OUT,
+                    code=DecisionCode.WARN_NOT_OWNER,
+                    message=pending.review_message or "This item belongs to another user.",
+                    user_id=pending.user_id,
+                    item_id=str(candidate["item_id"]),
+                    identity_confidence=identity.confidence,
+                    identity_status=identity.status,
+                    identity_second_score=identity.second_score,
+                    identity_margin=identity.margin,
+                    identity_valid_frames=identity.valid_frames,
+                    identity_vote_ratio=identity.vote_ratio,
+                    item_confidence=float(candidate["similarity"]),
+                )
+        try:
+            self._record_warning_for_actor_and_owner(decision)
+        except Exception:
+            LOGGER.exception("WARN_NOT_OWNER event recording failed")
+        try:
+            self.service.coordinator.feedback.publish(decision)
+        except Exception:
+            LOGGER.exception("WARN_NOT_OWNER feedback failed")
+
+    def _record_warning_for_actor_and_owner(self, decision: Decision) -> None:
+        """Record a denied take-out for both actor and owner without mutation."""
+        item = self.repo.get_item(decision.item_id or "")
+        user_ids = [decision.user_id]
+        if item is not None and item.owner_id != decision.user_id:
+            user_ids.append(item.owner_id)
+        for user_id in user_ids:
+            if user_id is None:
+                continue
+            self.repo.record_event(
+                InteractionEvent(
+                    event_id=str(uuid4()),
+                    session_id=decision.session_id,
+                    action=decision.action,
+                    decision=decision.code,
+                    occurred_at=decision.decided_at,
+                    user_id=user_id,
+                    item_id=decision.item_id,
+                    identity_confidence=decision.identity_confidence,
+                    identity_status=decision.identity_status,
+                    identity_second_score=decision.identity_second_score,
+                    identity_margin=decision.identity_margin,
+                    identity_valid_frames=decision.identity_valid_frames,
+                    identity_vote_ratio=decision.identity_vote_ratio,
+                    item_confidence=decision.item_confidence,
+                )
+            )
+
+    def _validate_share_users(
+        self,
+        owner_id: str,
+        shared: bool,
+        shared_user_ids: Sequence[str],
+    ) -> tuple[str, ...]:
+        if isinstance(shared_user_ids, (str, bytes)):
+            raise InspectionError(
+                "VALIDATION_ERROR", "shared_user_ids must be a list."
+            )
+        values = tuple(dict.fromkeys(shared_user_ids))
+        if shared and values:
+            raise InspectionError(
+                "VALIDATION_ERROR",
+                "Choose either all-member sharing or specific members, not both.",
+            )
+        if owner_id in values:
+            raise InspectionError(
+                "VALIDATION_ERROR", "The owner cannot be added as a share recipient."
+            )
+        known = {user.user_id for user in self.repo.list_users()}
+        if any(not isinstance(value, str) or value not in known for value in values):
+            raise InspectionError(
+                "INVALID_SHARE_SELECTION",
+                "One or more selected sharing users are invalid.",
+                403,
+            )
+        return values
+
     def _authorized_inventory(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.repo.connection.execute(
             """SELECT i.item_id, i.label, i.owner_id, s.shared, s.put_at, s.expires_on
@@ -514,9 +666,18 @@ class ItemInspectionManager:
             "authorized_inventory": list(pending.authorized_inventory),
             "committable": pending.committable,
             "review_state": (
-                "NO_AUTHORIZED_ITEMS" if no_authorized_take_choices else "READY"
+                pending.review_decision.value
+                if pending.review_decision is not None
+                else "NO_AUTHORIZED_ITEMS"
+                if no_authorized_take_choices
+                else "READY"
             ),
-            "review_message": (
+            "review_decision": (
+                pending.review_decision.value
+                if pending.review_decision is not None
+                else None
+            ),
+            "review_message": pending.review_message or (
                 "No authorized present inventory item is available. Nothing will be changed."
                 if no_authorized_take_choices
                 else None

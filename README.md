@@ -12,6 +12,15 @@ and item matching then creates or checks ownership and gives an on-screen
 `ALLOW`, `WARNING`, or `UNKNOWN` result. A non-owner warning also produces a
 local beep.
 
+Set `FRIDGE_WARNING_AUDIO_PATH` to a local `.mp3` or `.wav` to replace the
+default warning tone. The station API defaults to authenticated browser
+playback when this path is set, so the same file works on Windows and PN54
+Linux without installing an OS audio player. `FRIDGE_WARNING_AUDIO_MODE` can
+be `browser` (default with a configured file), `system`, or `both`; Linux
+system mode uses an already-installed `ffplay`, `mpv`, `paplay`, or `play` and
+never installs packages. Keep unlicensed or personal audio outside Git; the
+configured file is local runtime data, not a repository artifact.
+
 This repository currently contains the first Windows technical/interaction
 MVP only. It does **not** claim the final competition path: PN54 deployment,
 MI300 fine-tuning, and the final item embedding model are deliberately out of
@@ -62,8 +71,12 @@ npm run dev
 The API binds to `127.0.0.1:8000` by default. The frontend reads
 `NEXT_PUBLIC_FRIDGE_API_BASE_URL` and defaults to that address. Python owns the
 camera for the process lifetime, serializes station requests, and keeps login
-tokens only in memory. See [`docs/API_SPEC.md`](docs/API_SPEC.md) for the
-implemented routes and environment variables. “Ask the Fridge” retrieves real
+tokens only in memory. The browser displays uncached local JPEG snapshots from
+that same camera with the exact item ROI drawn in green, so users can position
+the item before PUT_IN or TAKE_OUT. Preview frames remain in memory and are not
+sent to Manta; only the cropped item ROI is sent during inspection. See
+[`docs/API_SPEC.md`](docs/API_SPEC.md) for the implemented routes and
+environment variables. “Ask the Fridge” retrieves real
 inventory-aware FoodKeeper passages and can send them to Lemonade on the same
 PN54. Configure and start the API on Ubuntu with:
 
@@ -254,7 +267,7 @@ recognition quality.
 | Enhanced multi-template / multi-frame face flow | Automated logic and ONNX-load tests only | Camera indices 0 and 1 were unavailable to the work environment, so A/B/unknown/no-face acceptance must be rerun locally after enrollment into a fresh test database. This is not an authentication system. |
 | Browser Item Vision integration | Mocked Windows integration tests plus preserved MI300X static evidence | Inspect/review/confirmed-commit logic is verified locally. The integrated browser flow and PN54 CPU runtime still require hardware smoke tests. |
 | Legacy CLI HSV baseline | Previously verified with one real item using `--item-threshold 0.60` | Retained only for the keyboard CLI; it is not an automatic browser fallback. |
-| Warning audio | Manually verified | The user observed `WARN_NOT_OWNER` and the local warning sound on the current Windows host. |
+| Warning audio | Automated dispatch verified; current browser hardware retest required | `MATCHED` and top-ranked `AMBIGUOUS` private-owner results dispatch `WARN_NOT_OWNER`; restart the local API before the next audible smoke test. |
 | PN54 / MI300 | Not connected by explicit scope | No PN54, Manta, training, or fine-tuning claim in this iteration. |
 
 ## Known limitations and troubleshooting

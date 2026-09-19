@@ -8,20 +8,20 @@ import time
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Callable, Literal, Sequence
+from typing import Annotated, Any, Callable, Literal, Sequence
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from fridge_guardian.adapters.camera import OpenCVCamera
 from fridge_guardian.adapters.face import FaceRecognitionSettings, SFaceIdentityProvider
 from fridge_guardian.adapters.feedback import OpenCVFeedback
-from fridge_guardian.adapters.item import SpatialHistogramItemRecognizer
+from fridge_guardian.adapters.item import ITEM_ROI, SpatialHistogramItemRecognizer
 from fridge_guardian.adapters.item_vision import ItemVisionClient, ItemVisionClientError
 from fridge_guardian.adapters.knowledge import FoodQuestions, LemonadeLLM, LocalKnowledge
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
@@ -63,6 +63,7 @@ class OperateRequest(BaseModel):
     selected_item_id: str | None = Field(default=None, max_length=64)
     add_as_new: bool = False
     shared: bool = False
+    shared_user_ids: list[str] = Field(default_factory=list, max_length=50)
     expires_on: date | None = None
 
 
@@ -124,19 +125,23 @@ class StationRuntime:
         capture_frames: Callable[[], Sequence[FrameSample]],
         *,
         capture_enrollment: Callable[[], Sequence[FrameSample]] | None = None,
+        preview_frame: Callable[[], Any] | None = None,
         questions: FoodQuestions | None = None,
         recipes: RecipeQuestions | None = None,
         item_inspections: ItemInspectionManager | None = None,
+        warning_audio_path: Path | None = None,
         close: Callable[[], None] | None = None,
     ) -> None:
         self.service = service
         self.capture_frames = capture_frames
         self.capture_enrollment = capture_enrollment or capture_frames
+        self.preview_frame = preview_frame
         self.questions = questions
         self.recipes = recipes or RecipeQuestions(
             service, PROJECT_ROOT / "data" / "knowledge" / "recipes"
         )
         self.item_inspections = item_inspections
+        self.warning_audio_path = warning_audio_path
         self.close_callback = close
         self.lock = asyncio.Lock()
 
@@ -186,7 +191,24 @@ def build_runtime() -> StationRuntime:
         items = SpatialHistogramItemRecognizer(
             threshold=float(os.environ.get("FRIDGE_ITEM_THRESHOLD", "0.70"))
         )
-        feedback = OpenCVFeedback()
+        warning_audio_value = os.environ.get("FRIDGE_WARNING_AUDIO_PATH", "").strip()
+        warning_audio_path = (
+            Path(warning_audio_value).expanduser().resolve()
+            if warning_audio_value
+            else None
+        )
+        default_audio_mode = "browser" if warning_audio_path else "system"
+        audio_mode = os.environ.get(
+            "FRIDGE_WARNING_AUDIO_MODE", default_audio_mode
+        ).strip().lower()
+        if audio_mode not in {"browser", "system", "both"}:
+            raise ValueError(
+                "FRIDGE_WARNING_AUDIO_MODE must be browser, system, or both"
+            )
+        feedback = OpenCVFeedback(
+            warning_audio_path=warning_audio_path,
+            audio_enabled=audio_mode in {"system", "both"},
+        )
         coordinator = SessionCoordinator(repository, identity, items, feedback)
         service = FridgeService(coordinator)
         item_vision = ItemVisionClient(
@@ -216,7 +238,12 @@ def build_runtime() -> StationRuntime:
         capture = CameraSessionCapture(camera, settings)
         return StationRuntime(
             service, capture, capture_enrollment=capture.enrollment, questions=questions,
-            recipes=recipes, item_inspections=item_inspections, close=close
+            preview_frame=camera.read, recipes=recipes,
+            item_inspections=item_inspections,
+            warning_audio_path=(
+                warning_audio_path if audio_mode in {"browser", "both"} else None
+            ),
+            close=close,
         )
     except Exception:
         if camera is not None:
@@ -248,6 +275,37 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
         status_code=status_code,
         content={"success": False, "error": {"code": code, "message": message}},
     )
+
+
+def _preview_jpeg(frame: Any) -> bytes:
+    """Draw the exact item ROI on a disposable local preview frame."""
+    import cv2
+
+    if frame is None or getattr(frame, "size", 0) == 0:
+        raise ApiError(503, "CAMERA_UNAVAILABLE", "The camera returned an empty frame.")
+    preview = frame.copy()
+    height, width = preview.shape[:2]
+    x1, y1, x2, y2 = ITEM_ROI
+    left, top = int(width * x1), int(height * y1)
+    right, bottom = int(width * x2), int(height * y2)
+    thickness = max(2, round(min(width, height) / 240))
+    color = (70, 220, 120)
+    cv2.rectangle(preview, (left, top), (right, bottom), color, thickness)
+    label_y = max(22, top - 8)
+    cv2.putText(
+        preview,
+        "ITEM AREA",
+        (left, label_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        max(0.5, min(width, height) / 900),
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+    ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 78])
+    if not ok:
+        raise ApiError(503, "CAMERA_UNAVAILABLE", "The camera preview could not be encoded.")
+    return encoded.tobytes()
 
 
 def _token(authorization: str | None) -> str:
@@ -332,6 +390,54 @@ def create_app(
         station: StationRuntime = request.app.state.station
         async with station.lock:
             return _success({"status": "ok", "mode": "local", "camera_owner": "python"})
+
+    @api.get("/api/v1/station/preview")
+    async def camera_preview(request: Request):
+        station: StationRuntime = request.app.state.station
+        if station.preview_frame is None:
+            raise ApiError(503, "CAMERA_UNAVAILABLE", "Camera preview is not configured.")
+        async with station.lock:
+            try:
+                jpeg = _preview_jpeg(station.preview_frame())
+            except ApiError:
+                raise
+            except Exception as exc:
+                raise ApiError(503, "CAMERA_UNAVAILABLE", str(exc)) from exc
+        return Response(
+            content=jpeg,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @api.get("/api/v1/station/warning-audio")
+    async def warning_audio(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        station: StationRuntime = request.app.state.station
+        token = _token(authorization)
+        try:
+            station.service._login(token)
+        except PermissionError as exc:
+            raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+        path = station.warning_audio_path
+        if path is None or not path.is_file():
+            raise ApiError(
+                404,
+                "WARNING_AUDIO_NOT_CONFIGURED",
+                "No browser warning audio file is configured.",
+            )
+        return FileResponse(
+            path,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @api.post("/api/v1/station/identify")
     async def identify(request: Request):
@@ -420,6 +526,7 @@ def create_app(
                     add_as_new=payload.add_as_new,
                     shared=payload.shared,
                     expires_on=payload.expires_on,
+                    shared_user_ids=payload.shared_user_ids,
                 )
             except PermissionError as exc:
                 raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
@@ -440,6 +547,34 @@ def create_app(
             except PermissionError as exc:
                 raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
             return _success({"items": items})
+
+    @api.get("/api/v1/members")
+    async def members(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        station: StationRuntime = request.app.state.station
+        token = _token(authorization)
+        async with station.lock:
+            try:
+                users = station.service.members(token)
+            except PermissionError as exc:
+                raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+            return _success({"users": users})
+
+    @api.get("/api/v1/history")
+    async def history(
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        station: StationRuntime = request.app.state.station
+        token = _token(authorization)
+        async with station.lock:
+            try:
+                events = station.service.history(token)
+            except PermissionError as exc:
+                raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+            return _success({"events": events})
 
     @api.post("/api/v1/questions")
     async def ask_question(

@@ -29,7 +29,9 @@ class FridgeServiceTests(unittest.TestCase):
     def test_inventory_expiry_and_take_out(self):
         self.assertEqual(self.login.display_name, "Owner")
         self.put(expires=date(2026, 9, 19))
-        self.assertEqual(len(self.service.inventory(self.login.token)), 1)
+        inventory = self.service.inventory(self.login.token)
+        self.assertEqual(len(inventory), 1)
+        self.assertEqual(inventory[0]["owner_name"], "Owner")
         result = self.service.process(self.login.token, Action.TAKE_OUT, frames())
         self.assertEqual(result.decision.code, DecisionCode.ALLOW_OWNER)
         self.assertTrue(result.warnings)  # Taipei is already September 20

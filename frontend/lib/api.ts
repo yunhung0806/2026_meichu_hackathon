@@ -10,9 +10,29 @@ export type InventoryItem = {
   item_id: string;
   label: string;
   owner_id: string;
+  owner_name?: string;
   shared: number;
+  access_type: "OWNER" | "SHARED_ALL" | "SHARED_DIRECT";
   put_at: string;
   expires_on: string | null;
+};
+
+export type Member = {
+  user_id: string;
+  display_name: string;
+};
+
+export type HistoryEvent = {
+  event_id: string;
+  session_id: string;
+  action: "PUT_IN" | "TAKE_OUT";
+  decision: string;
+  occurred_at: string;
+  item_id: string | null;
+  item_label: string | null;
+  owner_name: string | null;
+  viewer_role: "OWNER" | "ACTOR" | null;
+  related_user_name: string | null;
 };
 
 export type OperationResult = {
@@ -55,7 +75,8 @@ export type ItemInspection = {
   suggested_label: string;
   authorized_inventory: ItemCandidate[];
   committable: boolean;
-  review_state: "READY" | "NO_AUTHORIZED_ITEMS";
+  review_state: "READY" | "NO_AUTHORIZED_ITEMS" | "WARN_NOT_OWNER";
+  review_decision: "WARN_NOT_OWNER" | null;
   review_message: string | null;
   latency_ms: Record<string, number>;
 };
@@ -126,6 +147,31 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const stationApi = {
   baseUrl: API_BASE_URL,
 
+  previewUrl(revision: number) {
+    return `${API_BASE_URL}/api/v1/station/preview?revision=${revision}`;
+  },
+
+  async playWarningAudio() {
+    const headers = new Headers();
+    if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+    const response = await fetch(`${API_BASE_URL}/api/v1/station/warning-audio`, {
+      headers,
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error("警示音效尚未設定");
+    const url = URL.createObjectURL(await response.blob());
+    const audio = new Audio(url);
+    const release = () => URL.revokeObjectURL(url);
+    audio.addEventListener("ended", release, { once: true });
+    audio.addEventListener("error", release, { once: true });
+    try {
+      await audio.play();
+    } catch (cause) {
+      release();
+      throw cause;
+    }
+  },
+
   health() {
     return request<{ status: string; mode: string; camera_owner: string }>("/api/v1/health");
   },
@@ -160,6 +206,7 @@ export const stationApi = {
     selected_item_id?: string | null;
     add_as_new?: boolean;
     shared?: boolean;
+    shared_user_ids?: string[];
     expires_on?: string | null;
   }) {
     return request<OperationResult>("/api/v1/station/operate", {
@@ -170,6 +217,14 @@ export const stationApi = {
 
   inventory() {
     return request<{ items: InventoryItem[] }>("/api/v1/inventory").then(({ items }) => items);
+  },
+
+  members() {
+    return request<{ users: Member[] }>("/api/v1/members").then(({ users }) => users);
+  },
+
+  history() {
+    return request<{ events: HistoryEvent[] }>("/api/v1/history").then(({ events }) => events);
   },
 
   askQuestion(question: string, category: "recipes" | "storage" = "storage") {
