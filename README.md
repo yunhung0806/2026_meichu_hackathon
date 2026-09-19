@@ -32,19 +32,21 @@ $env:UV_CACHE_DIR="$PWD\.uv-cache"; uv run fridge-guardian
 
 Use another camera with `uv run fridge-guardian --camera-index 1`. The local
 database defaults to `data/fridge_guardian.db` and is git-ignored.
+Face thresholds and capture durations are centralized in `config/face.json`.
+Use `--debug-face` only while calibrating to show detailed scores.
 
 ## Controls and 2–3 minute demo
 
-Keep exactly one face visible. Hold exactly one item so it fills the green
-`HANDHELD ITEM` box; the face must remain outside that box. Before pressing a
-key, use small natural movements/rotations so the capture burst contains
-several clear views.
+Keep exactly one clear face visible and mostly front-facing. Only the item goes
+inside the green `HANDHELD ITEM` box; the face does not. During enrollment,
+follow the on-screen sequence: look straight, turn slightly left, then slightly
+right. Do not make a full profile turn.
 
 | Key | Operation |
 | --- | --- |
-| `U` | Enter a display name in the PowerShell window, return to camera view, and capture face templates. Repeat for a second user. |
+| `U` | Enter a display name, then follow the straight / slight-left / slight-right prompts. The app samples 24 frames and keeps up to 8 diverse, clear templates. Repeat for a second user. |
 | `P` | `PUT_IN`: identify the user; if the item is new, capture several item features, create an `item_id`, and bind it to that user. |
-| `T` | `TAKE_OUT`: identify both, look up ownership, then show `ALLOW_OWNER`, `ALLOW_SHARED`, `WARN_NOT_OWNER`, `UNKNOWN_USER`, or `UNKNOWN_ITEM`. |
+| `T` | `TAKE_OUT`: identify both, look up ownership, then show an ownership result or the distinct `NO_FACE`, `UNKNOWN_USER`, `AMBIGUOUS_USER`, or `UNKNOWN_ITEM` state. |
 | `Q` | Quit cleanly. |
 
 Shortest manual acceptance sequence:
@@ -107,6 +109,43 @@ data: do not publish or commit it. There is no liveness detection, so this MVP
 must not be used for security, access control, or consequential identity
 verification.
 
+## Face enrollment, decisions, and calibration
+
+YuNet and SFace remain unchanged. Enrollment now rejects missing/multiple,
+small, and blurry faces, removes embedding outliers, and avoids near-duplicate
+templates. Raw face images are never saved. Recognition collects 16 candidates
+over 1.6 seconds, requires at least 5 quality-valid frames, scores each user
+against multiple templates, then uses a median across frames plus a vote check.
+
+The identity result is explicit:
+
+- `NO_FACE`: fewer than the configured number of quality-valid frames.
+- `UNKNOWN_USER`: a face was captured but the best score is below the absolute threshold.
+- `AMBIGUOUS_USER`: the best score passes, but the first/second margin or frame vote is insufficient.
+- `MATCHED`: absolute score, margin, and vote checks all pass; ownership processing continues.
+
+Default starting values are `absolute_threshold=0.55`,
+`margin_threshold=0.12`, `minimum_valid_frames=5`, and
+`minimum_vote_ratio=0.60`. These are conservative starting points, not universal
+best thresholds. Adjust only from local A/B/unknown measurements in
+`config/face.json`; increasing the score or margin threshold reduces false
+acceptance but can increase rejection.
+
+For isolated acceptance testing, use a separate database so existing data is
+not modified:
+
+```powershell
+$env:UV_CACHE_DIR="$PWD\.uv-cache"
+uv run fridge-guardian --db data/face_stability_test.db
+uv run python scripts/evaluate_faces.py --db data/face_stability_test.db --true-identity A --attempts 10 --output data/face_eval_A.csv
+uv run python scripts/evaluate_faces.py --db data/face_stability_test.db --true-identity B --attempts 10 --output data/face_eval_B.csv
+uv run python scripts/evaluate_faces.py --db data/face_stability_test.db --true-identity UNKNOWN --attempts 10 --output data/face_eval_unknown.csv
+```
+
+For several no-face trials, run the same evaluator with
+`--true-identity NO_FACE`. The CSV stores only labels, decisions, scores,
+margins, valid-frame counts, and vote ratios; it stores no images or video.
+
 ## Models and dependencies
 
 `scripts/download_models.py` downloads from OpenCV Zoo and rejects a file
@@ -133,18 +172,21 @@ $env:UV_CACHE_DIR="$PWD\.uv-cache"
 uv run python -m unittest discover -s tests -v
 ```
 
-The tests cover ownership policy, mocked `PUT_IN`/`TAKE_OUT`, unknown user,
-unknown item, same-session enforcement, and SQLite close/reopen persistence.
-They do not prove camera access or recognition quality.
+The tests cover ownership policy, mocked `PUT_IN`/`TAKE_OUT`, explicit face
+states, face-quality filtering, embedding outlier removal, diverse-template
+selection, multi-frame score aggregation, unknown item, same-session
+enforcement, and SQLite close/reopen persistence. They do not prove real-person
+recognition quality.
 
 ## Verification status (2026-09-19)
 
 | Area | Status | Evidence / required follow-up |
 | --- | --- | --- |
-| Domain, policy, mocked flow | 10/10 local tests passed on Windows CPython 3.12.13 | Includes mocked full flow, same-session rejection, synthetic item matching, and beep dispatch; no camera claim. |
+| Automated logic and persistence | 20/20 local tests passed on Windows CPython 3.12.13 | Includes face quality/outlier/aggregation/status tests, mocked full flow, SQLite migration/reopen, synthetic item matching, and beep dispatch; no camera claim. |
 | SQLite schema and persistence | Passed on Windows CPython 3.12.13 | Reopen test covers required records. |
 | Real camera preview | Manually verified on the current Windows host | Live preview, handheld-item ROI, capture countdown, and `FACE READY` guidance were observed; camera model was not recorded. |
-| YuNet + SFace recognition | Manually verified with two consenting users | Enrollment and local matching worked, but intermittent missed detections and one operational identity mismatch were observed. This is not an authentication system. |
+| Original YuNet + SFace baseline | Previously manually verified with two consenting users | The old single-decision flow had intermittent missed detections and one operational identity mismatch. |
+| Enhanced multi-template / multi-frame face flow | Automated logic and ONNX-load tests only | Camera indices 0 and 1 were unavailable to the work environment, so A/B/unknown/no-face acceptance must be rerun locally after enrollment into a fresh test database. This is not an authentication system. |
 | Item recognition | One real item manually verified with `--item-threshold 0.60` | `PUT_IN`, owner `TAKE_OUT`, and non-owner `TAKE_OUT` completed. Accuracy is intentionally provisional; three distinct items and three consecutive runs remain unverified. |
 | Warning audio | Manually verified | The user observed `WARN_NOT_OWNER` and the local warning sound on the current Windows host. |
 | PN54 / MI300 | Not connected by explicit scope | No PN54, Manta, training, or fine-tuning claim in this iteration. |
@@ -155,14 +197,14 @@ They do not prove camera access or recognition quality.
   embedding. Similar-looking packages, background changes, glare, rotation,
   occlusion, and an item not filling the ROI may become `UNKNOWN` or match
   incorrectly. Use visually distinct items for this validation round.
-- Thresholds (`0.45` face cosine, `0.70` item cosine plus ambiguity margins)
-  are conservative starting points, not measured production values.
+- Face thresholds are centralized in `config/face.json`; item matching retains
+  its existing `0.70` default. Neither is a measured production value.
 - The first hardware walkthrough used `--item-threshold 0.60` to exercise the
   end-to-end flow. That lower override weakens unknown-item protection and is
   evidence of integration only, not acceptable recognition accuracy.
-- Face enrollment accepts frames only when YuNet sees exactly one face. Move
-  closer, improve front lighting, remove other faces, and press `U` again if
-  fewer than three templates are captured.
+- Face enrollment accepts frames only when YuNet sees exactly one sufficiently
+  large, sharp face. Move closer, improve front lighting, remove other faces,
+  and press `U` again if fewer than five diverse templates survive filtering.
 - `UNKNOWN` intentionally blocks a confident ownership decision; the system
   must not guess at low confidence.
 - If the camera cannot open, allow desktop-app camera access in Windows

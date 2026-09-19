@@ -13,11 +13,14 @@ class OpenCVFeedback:
         DecisionCode.ITEM_REGISTERED: (60, 210, 60),
         DecisionCode.ITEM_ALREADY_REGISTERED: (60, 210, 210),
         DecisionCode.WARN_NOT_OWNER: (40, 40, 240),
+        DecisionCode.NO_FACE: (40, 40, 240),
         DecisionCode.UNKNOWN_USER: (0, 180, 255),
+        DecisionCode.AMBIGUOUS_USER: (0, 180, 255),
         DecisionCode.UNKNOWN_ITEM: (0, 180, 255),
     }
 
-    def __init__(self) -> None:
+    def __init__(self, debug: bool = False) -> None:
+        self.debug = debug
         self.last_decision: Decision | None = None
         self.last_published_at = 0.0
         self.notice: str | None = None
@@ -60,7 +63,7 @@ class OpenCVFeedback:
         height, width = frame.shape[:2]
         cv2.rectangle(frame, (0, 0), (width, 92), (25, 25, 25), -1)
         cv2.putText(frame, "U Enroll user   P PUT_IN   T TAKE_OUT   Q Quit", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (245, 245, 245), 2)
-        cv2.putText(frame, "Face visible + one item filling the green box", (18, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.66, (190, 230, 190), 2)
+        cv2.putText(frame, "Keep face clear/front; ONLY the item goes in the green box", (18, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (190, 230, 190), 2)
         if face_boxes is not None:
             if len(face_boxes) == 1:
                 face_status = "FACE READY"
@@ -105,4 +108,21 @@ class OpenCVFeedback:
         if message:
             cv2.rectangle(frame, (0, height - 64), (width, height), (20, 20, 20), -1)
             cv2.putText(frame, message[:100], (18, height - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+        if self.debug and self.last_decision:
+            details = (
+                f"face={self.last_decision.identity_confidence:.3f} "
+                f"second={self.last_decision.identity_second_score:.3f} "
+                f"margin={self.last_decision.identity_margin:.3f} "
+                f"valid={self.last_decision.identity_valid_frames} "
+                f"votes={self.last_decision.identity_vote_ratio:.2f}"
+            )
+            cv2.putText(
+                frame,
+                details,
+                (18, height - 78),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.52,
+                (220, 220, 220),
+                1,
+            )
         return frame

@@ -6,6 +6,7 @@ from fridge_guardian.domain import (
     Action,
     Decision,
     FaceTemplate,
+    FaceEnrollmentResult,
     FrameSample,
     IdentityResult,
     InteractionEvent,
@@ -21,7 +22,11 @@ class ActionSource(Protocol):
 
 
 class IdentityProvider(Protocol):
-    def extract_templates(self, session_id: str, frames: Sequence[FrameSample]) -> list[bytes]: ...
+    minimum_enrollment_templates: int
+
+    def extract_templates(
+        self, session_id: str, frames: Sequence[FrameSample]
+    ) -> FaceEnrollmentResult: ...
 
     def identify(
         self,

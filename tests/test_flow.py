@@ -6,7 +6,13 @@ from pathlib import Path
 
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
-from fridge_guardian.domain import Action, DecisionCode, FrameSample, utc_now
+from fridge_guardian.domain import (
+    Action,
+    DecisionCode,
+    FrameSample,
+    IdentityStatus,
+    utc_now,
+)
 from tests.fakes import FakeIdentityProvider, FakeItemRecognizer, RecordingFeedback
 
 
@@ -50,6 +56,15 @@ class MockFlowTests(unittest.TestCase):
         result = self.coordinator.process(Action.TAKE_OUT, frames())
         self.assertEqual(result.code, DecisionCode.UNKNOWN_USER)
         self.assertIsNone(result.item_id)
+
+    def test_no_face_and_ambiguous_are_distinct(self):
+        self.identity.status = IdentityStatus.NO_FACE
+        no_face = self.coordinator.process(Action.TAKE_OUT, frames("no-face"))
+        self.assertEqual(no_face.code, DecisionCode.NO_FACE)
+
+        self.identity.status = IdentityStatus.AMBIGUOUS_USER
+        ambiguous = self.coordinator.process(Action.TAKE_OUT, frames("ambiguous"))
+        self.assertEqual(ambiguous.code, DecisionCode.AMBIGUOUS_USER)
 
     def test_unknown_item_does_not_guess(self):
         user = self.repo.add_user("A")

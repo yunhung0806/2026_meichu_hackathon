@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fridge_guardian.adapters.camera import CameraError, OpenCVCamera
-from fridge_guardian.adapters.face import SFaceIdentityProvider
+from fridge_guardian.adapters.face import FaceRecognitionSettings, SFaceIdentityProvider
 from fridge_guardian.adapters.feedback import OpenCVFeedback
 from fridge_guardian.adapters.item import SpatialHistogramItemRecognizer
 from fridge_guardian.adapters.manual_action import ManualActionSource
@@ -29,9 +29,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--sface", type=Path, default=PROJECT_ROOT / "models" / "face_recognition_sface_2021dec.onnx"
     )
-    parser.add_argument("--capture-seconds", type=float, default=1.8)
-    parser.add_argument("--samples", type=int, default=9)
-    parser.add_argument("--prepare-seconds", type=float, default=1.0)
+    parser.add_argument(
+        "--face-config", type=Path, default=PROJECT_ROOT / "config" / "face.json"
+    )
+    parser.add_argument("--debug-face", action="store_true")
     parser.add_argument("--item-threshold", type=float, default=0.70)
     return parser.parse_args(argv)
 
@@ -43,6 +44,7 @@ def capture_session(
     seconds: float,
     samples: int,
     prepare_seconds: float,
+    mode: str = "recognition",
 ):
     import cv2
 
@@ -61,7 +63,8 @@ def capture_session(
         cv2.waitKey(1)
     interval = max(0.05, seconds / max(samples, 1))
     next_sample = time.monotonic()
-    end = time.monotonic() + seconds
+    started = time.monotonic()
+    end = started + seconds
     while time.monotonic() < end:
         frame = camera.read()
         now = time.monotonic()
@@ -69,9 +72,19 @@ def capture_session(
             frames.append(FrameSample(session_id, utc_now(), frame.copy()))
             next_sample = now + interval
         remaining = max(0.0, end - now)
+        progress = (now - started) / max(seconds, 0.01)
+        if mode == "enrollment":
+            if progress < 0.34:
+                guidance = "ENROLL 1/3: look straight at the camera"
+            elif progress < 0.67:
+                guidance = "ENROLL 2/3: turn SLIGHTLY left"
+            else:
+                guidance = "ENROLL 3/3: turn SLIGHTLY right"
+        else:
+            guidance = "IDENTIFY: keep your face clear and mostly front"
         preview = feedback.draw(
             frame.copy(),
-            f"Capturing... keep FACE READY {remaining:0.1f}s",
+            f"{guidance} ({remaining:0.1f}s)",
             identity.detect_for_preview(frame),
         )
         cv2.imshow("Fridge Guardian - Local MVP", preview)
@@ -82,12 +95,13 @@ def capture_session(
 def run(args: argparse.Namespace) -> int:
     import cv2
 
-    feedback = OpenCVFeedback()
+    settings = FaceRecognitionSettings.load(args.face_config)
+    feedback = OpenCVFeedback(debug=args.debug_face)
     action_source = ManualActionSource()
     repository = SQLiteRepository(args.db)
     camera: OpenCVCamera | None = None
     try:
-        identity = SFaceIdentityProvider(args.yunet, args.sface)
+        identity = SFaceIdentityProvider(args.yunet, args.sface, settings)
         items = SpatialHistogramItemRecognizer(threshold=args.item_threshold)
         coordinator = SessionCoordinator(repository, identity, items, feedback)
         camera = OpenCVCamera(args.camera_index)
@@ -109,9 +123,10 @@ def run(args: argparse.Namespace) -> int:
                     camera,
                     feedback,
                     identity,
-                    args.capture_seconds,
-                    args.samples,
-                    args.prepare_seconds,
+                    settings.enrollment_window_seconds,
+                    settings.enrollment_candidate_frames,
+                    settings.prepare_seconds,
+                    mode="enrollment",
                 )
                 try:
                     user = coordinator.enroll_user(name, frames)
@@ -127,9 +142,10 @@ def run(args: argparse.Namespace) -> int:
                     camera,
                     feedback,
                     identity,
-                    args.capture_seconds,
-                    args.samples,
-                    args.prepare_seconds,
+                    settings.recognition_window_seconds,
+                    settings.recognition_candidate_frames,
+                    settings.prepare_seconds,
+                    mode="recognition",
                 )
                 decision = coordinator.process(action, frames)
                 user_name = next(
@@ -140,11 +156,18 @@ def run(args: argparse.Namespace) -> int:
                     ),
                     "UNKNOWN",
                 )
-                print(
-                    f"{decision.code.value} session={decision.session_id} "
-                    f"user={user_name} face={decision.identity_confidence:.3f} "
-                    f"item={decision.item_confidence:.3f}"
+                summary = (
+                    f"{decision.code.value} session={decision.session_id} user={user_name}"
                 )
+                if args.debug_face:
+                    summary += (
+                        f" face={decision.identity_confidence:.3f} "
+                        f"second={decision.identity_second_score:.3f} "
+                        f"margin={decision.identity_margin:.3f} "
+                        f"valid={decision.identity_valid_frames} "
+                        f"votes={decision.identity_vote_ratio:.2f}"
+                    )
+                print(summary)
     finally:
         if camera is not None:
             camera.close()
@@ -155,7 +178,7 @@ def run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     try:
         return run(parse_args(argv))
-    except (CameraError, FileNotFoundError) as exc:
+    except (CameraError, FileNotFoundError, ValueError) as exc:
         print(f"Startup error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

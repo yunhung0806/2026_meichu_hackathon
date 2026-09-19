@@ -10,6 +10,8 @@ from fridge_guardian.domain import (
     Decision,
     DecisionCode,
     FrameSample,
+    IdentityResult,
+    IdentityStatus,
     InteractionEvent,
     User,
     utc_now,
@@ -49,11 +51,15 @@ class SessionCoordinator:
         clean_name = display_name.strip()
         if not clean_name:
             raise EnrollmentError("Display name cannot be empty")
-        features = self.identity_provider.extract_templates(session_id, frames)
-        if len(features) < 3:
-            raise EnrollmentError("Need at least 3 clear single-face samples")
+        extraction = self.identity_provider.extract_templates(session_id, frames)
+        required = self.identity_provider.minimum_enrollment_templates
+        if len(extraction.templates) < required:
+            raise EnrollmentError(
+                f"Kept {len(extraction.templates)}/{extraction.candidate_frames} frames; "
+                f"need {required}. Face camera, then turn slightly left and right."
+            )
         user = self.repository.add_user(clean_name)
-        self.repository.add_face_templates(user.user_id, features, "sface-f32-v1")
+        self.repository.add_face_templates(user.user_id, extraction.templates, "sface-f32-v2")
         return user
 
     def process(self, action: Action, frames: Sequence[FrameSample]) -> Decision:
@@ -61,28 +67,44 @@ class SessionCoordinator:
         identity = self.identity_provider.identify(
             session_id, frames, self.repository.list_face_templates()
         )
-        if identity.user_id is None:
+        if identity.status is not IdentityStatus.MATCHED or identity.user_id is None:
+            status = (
+                identity.status
+                if identity.status is not IdentityStatus.MATCHED
+                else IdentityStatus.UNKNOWN_USER
+            )
+            codes = {
+                IdentityStatus.NO_FACE: DecisionCode.NO_FACE,
+                IdentityStatus.UNKNOWN_USER: DecisionCode.UNKNOWN_USER,
+                IdentityStatus.AMBIGUOUS_USER: DecisionCode.AMBIGUOUS_USER,
+            }
+            messages = {
+                IdentityStatus.NO_FACE: "No face - keep one clear face visible and retry",
+                IdentityStatus.UNKNOWN_USER: "Unknown user - enroll with U or try again",
+                IdentityStatus.AMBIGUOUS_USER: "Ambiguous user - face camera directly and retry",
+            }
             return self._finish(
                 Decision(
                     session_id=session_id,
                     action=action,
-                    code=DecisionCode.UNKNOWN_USER,
-                    message="Unknown user - enroll with U or try again",
-                    identity_confidence=identity.confidence,
+                    code=codes[status],
+                    message=messages[status],
+                    **self._identity_fields(identity),
                 )
             )
 
         if action is Action.PUT_IN:
-            return self._put_in(session_id, frames, identity.user_id, identity.confidence)
-        return self._take_out(session_id, frames, identity.user_id, identity.confidence)
+            return self._put_in(session_id, frames, identity)
+        return self._take_out(session_id, frames, identity)
 
     def _put_in(
         self,
         session_id: str,
         frames: Sequence[FrameSample],
-        user_id: str,
-        identity_confidence: float,
+        identity: IdentityResult,
     ) -> Decision:
+        assert identity.user_id is not None
+        user_id = identity.user_id
         user_name = self._user_name(user_id)
         candidates = self.repository.list_item_templates()
         match = self.item_recognizer.identify(session_id, frames, candidates)
@@ -95,7 +117,7 @@ class SessionCoordinator:
                     message=f"Known item {match.item_id[:8]} returned by {user_name}",
                     user_id=user_id,
                     item_id=match.item_id,
-                    identity_confidence=identity_confidence,
+                    **self._identity_fields(identity),
                     item_confidence=match.confidence,
                 )
             )
@@ -109,7 +131,7 @@ class SessionCoordinator:
                     code=DecisionCode.UNKNOWN_ITEM,
                     message="Item capture unclear - fill the green box and retry",
                     user_id=user_id,
-                    identity_confidence=identity_confidence,
+                    **self._identity_fields(identity),
                 )
             )
 
@@ -123,7 +145,7 @@ class SessionCoordinator:
                 message=f"Registered {item.label} to {user_name}",
                 user_id=user_id,
                 item_id=item.item_id,
-                identity_confidence=identity_confidence,
+                **self._identity_fields(identity),
             )
         )
 
@@ -131,9 +153,10 @@ class SessionCoordinator:
         self,
         session_id: str,
         frames: Sequence[FrameSample],
-        user_id: str,
-        identity_confidence: float,
+        identity: IdentityResult,
     ) -> Decision:
+        assert identity.user_id is not None
+        user_id = identity.user_id
         user_name = self._user_name(user_id)
         match = self.item_recognizer.identify(
             session_id, frames, self.repository.list_item_templates()
@@ -146,7 +169,7 @@ class SessionCoordinator:
                     code=DecisionCode.UNKNOWN_ITEM,
                     message="Unknown item - no ownership decision made",
                     user_id=user_id,
-                    identity_confidence=identity_confidence,
+                    **self._identity_fields(identity),
                     item_confidence=match.confidence,
                 )
             )
@@ -161,7 +184,7 @@ class SessionCoordinator:
                     message="Item template has no ownership record",
                     user_id=user_id,
                     item_confidence=match.confidence,
-                    identity_confidence=identity_confidence,
+                    **self._identity_fields(identity),
                 )
             )
         code = ownership_decision(
@@ -183,7 +206,7 @@ class SessionCoordinator:
                 message=messages[code],
                 user_id=user_id,
                 item_id=item.item_id,
-                identity_confidence=identity_confidence,
+                **self._identity_fields(identity),
                 item_confidence=match.confidence,
             )
         )
@@ -199,11 +222,27 @@ class SessionCoordinator:
                 user_id=decision.user_id,
                 item_id=decision.item_id,
                 identity_confidence=decision.identity_confidence,
+                identity_status=decision.identity_status,
+                identity_second_score=decision.identity_second_score,
+                identity_margin=decision.identity_margin,
+                identity_valid_frames=decision.identity_valid_frames,
+                identity_vote_ratio=decision.identity_vote_ratio,
                 item_confidence=decision.item_confidence,
             )
         )
         self.feedback.publish(decision)
         return decision
+
+    @staticmethod
+    def _identity_fields(identity: IdentityResult) -> dict[str, object]:
+        return {
+            "identity_confidence": identity.confidence,
+            "identity_status": identity.status,
+            "identity_second_score": identity.second_score,
+            "identity_margin": identity.margin,
+            "identity_valid_frames": identity.valid_frames,
+            "identity_vote_ratio": identity.vote_ratio,
+        }
 
     def _user_name(self, user_id: str) -> str:
         return next(
