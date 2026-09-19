@@ -1,0 +1,10 @@
+.venv/
+.uv-cache/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+data/*.db
+data/*.db-*
+models/*.onnx

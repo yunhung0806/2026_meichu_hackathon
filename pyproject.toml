@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fridge-guardian"
+version = "0.1.0"
+description = "Privacy-first local camera MVP for shared-fridge ownership checks"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "numpy>=1.26,<3",
+  "opencv-python>=4.10,<5",
+]
+
+[project.scripts]
+fridge-guardian = "fridge_guardian.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
