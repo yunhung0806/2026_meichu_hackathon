@@ -55,7 +55,7 @@ export default function RecipeView() {
         {data.excluded.length > 0 && <div className="recipe-excluded"><h4>未納入推薦</h4>{data.excluded.map(item => <p key={item.item_id}>{item.label}：{item.status === "EXPIRED" ? "已超過包裝期限" : "已超過一般保存參考"}</p>)}</div>}
         <p className="rag-hint">FoodKeeper 日期是一般保存參考，不是包裝效期或安全保證；烹調前請確認食材實際狀態。</p>
       </section>
-      {data.answer && <section className="panel ai-answer"><div className="answer-label"><span>✦</span> Lemonade 食譜建議 · {data.status}</div><p>{data.answer}</p></section>}
+      {data.answer && <section className="panel ai-answer"><p>{data.answer}</p></section>}
       <section className="panel"><div className="panel-head"><div><h3>推薦食譜</h3><p>優先使用快到期食材，再依缺少主食材數量排序。</p></div></div>{data.recipes.length === 0 && <p>尚未找到符合目前庫存的食譜。</p>}<div className="recipe-grid">{data.recipes.map(recipe => <article className="recipe-card" key={recipe.source}><span className="pill">{recipe.missing.length ? `需補 ${recipe.missing.length} 種主食材` : "主食材已齊"}</span><h3>{recipe.title}</h3>{recipe.use_first.length > 0 && <p className="recipe-priority">優先用掉：{recipe.use_first.join("、")}</p>}<p><b>現有：</b>{recipe.matched.join("、")}</p><p><b>缺少：</b>{recipe.missing.join("、") || "無"}</p><p><b>另確認：</b>{recipe.pantry.join("、")}</p><ol>{recipe.steps.map((step, index) => <li key={index}>{step}</li>)}</ol><details><summary>食譜來源</summary><p>{recipe.source_title} · {recipe.provenance}</p><code>{recipe.source}</code></details></article>)}</div></section>
     </>}
   </div>;
