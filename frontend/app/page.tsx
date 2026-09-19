@@ -9,6 +9,7 @@ type Tab = "home" | "items" | "recipes" | "history" | "ask";
 type Flow = "idle" | "register" | "enrolling" | "recognizing" | "menu" | "scanning" | "review" | "committing" | "result" | "error";
 
 export default function Home() {
+  const [showEntrance, setShowEntrance] = useState(true);
   const [tab, setTab] = useState<Tab>("home");
   const [flow, setFlow] = useState<Flow>("idle");
   const [user, setUser] = useState<IdentifiedUser | null>(null);
@@ -23,12 +24,14 @@ export default function Home() {
   const [addAsNew, setAddAsNew] = useState(false);
   const [error, setError] = useState("");
   const [newUserName, setNewUserName] = useState("");
-  const [today] = useState(() => new Intl.DateTimeFormat(
-    "zh-TW", { month: "long", day: "numeric", weekday: "long" }
-  ).format(new Date()));
+  const [today, setToday] = useState("今天");
 
   useEffect(() => {
     stationApi.health().then(() => setOnline(true)).catch(() => setOnline(false));
+    const dateTimer = window.setTimeout(() => setToday(new Intl.DateTimeFormat("zh-TW", { month: "long", day: "numeric", weekday: "long" }).format(new Date())), 0);
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const entranceTimer = window.setTimeout(() => setShowEntrance(false), reduceMotion ? 100 : 2800);
+    return () => { window.clearTimeout(dateTimer); window.clearTimeout(entranceTimer); };
   }, []);
 
   function showError(cause: unknown) {
@@ -139,8 +142,9 @@ export default function Home() {
   }
 
   return <main className="app-shell">
+    {showEntrance && <EntranceIntro onSkip={() => setShowEntrance(false)} />}
     <aside className="sidebar">
-      <div className="brand"><span className="brand-mark">F</span><div><strong>Fridge Guardian</strong><small>共享冰箱管家</small></div></div>
+      <div className="brand"><span className="brand-mark" aria-hidden="true"></span><div><strong>冰友 ChillMate</strong><small>共享冰箱管家</small></div></div>
       <nav aria-label="主要導覽">
         <NavButton active={tab === "home"} label="首頁" icon="⌂" onClick={() => void selectTab("home")} />
         <NavButton active={tab === "items"} label="冰箱物品" icon="▦" count={String(inventory.length)} onClick={() => void selectTab("items")} />
@@ -151,8 +155,8 @@ export default function Home() {
       <div className="sidebar-bottom"><div className="profile"><div className="avatar">{user?.display_name.slice(0, 1) ?? "?"}</div><div><strong>{user?.display_name ?? "尚未辨識"}</strong></div></div></div>
     </aside>
     <section className="content">
-      <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab, user)}</h1></div></header>
-      {tab === "home" && <HomeView inventory={inventory} online={online} onStart={beginRecognition} onEnroll={beginEnrollment} onTab={selectTab} />}
+      <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab)}</h1></div></header>
+      {tab === "home" && <HomeView inventory={inventory} online={online} user={user} onStart={beginRecognition} onEnroll={beginEnrollment} onTab={selectTab} />}
       {tab === "items" && <ItemsView items={inventory} identified={Boolean(user)} />}
       {tab === "recipes" && (user ? <RecipeView key={`${user.user_id}:${user.access_token}`} /> : <UnavailableView title="請先辨識使用者" detail="回首頁辨識後，就能依你的庫存與保存期限推薦料理。" />)}
       {tab === "history" && <UnavailableView title="使用紀錄尚未連線" />}
@@ -173,15 +177,23 @@ export default function Home() {
 }
 
 function NavButton({ active, label, icon, count, onClick }: { active: boolean; label: string; icon: string; count?: string; onClick: () => void }) { return <button className={active ? "nav-item active" : "nav-item"} onClick={onClick}><span>{icon}</span>{label}{count && <b>{count}</b>}</button>; }
-function tabTitle(tab: Tab, user: IdentifiedUser | null) { return { home: user ? `你好，${user.display_name}` : "Fridge Guardian", items: "冰箱裡有什麼？", recipes: "食譜推薦", history: "使用紀錄", ask: "問問你的冰箱" }[tab]; }
+function tabTitle(tab: Tab) { return { home: "冰友 ChillMate", items: "冰箱裡有什麼？", recipes: "食譜推薦", history: "使用紀錄", ask: "問問你的冰箱" }[tab]; }
 
-function HomeView({ inventory, online, onStart, onEnroll, onTab }: { inventory: InventoryItem[]; online: boolean; onStart: () => void; onEnroll: () => void; onTab: (tab: Tab) => Promise<void> }) {
-  const expiring = inventory.filter(item => item.expires_on).length;
-  const shared = inventory.filter(item => Boolean(item.shared)).length;
-  return <div className="page-grid"><section className="hero-card"><div className="hero-copy"><h2>要放東西，<br />還是拿東西？</h2><div className="identity-actions"><button className="primary-button" onClick={onStart} disabled={!online}><span className="scan-icon">◎</span>{online ? "開始人臉辨識" : "等待本機 API"}<b>→</b></button><button className="secondary-button" onClick={onEnroll} disabled={!online}><span>＋</span>我是新人</button></div></div><div className="camera-visual"><div className="camera-ring"><div className="face-art"></div><div className="corner tl"></div><div className="corner tr"></div><div className="corner bl"></div><div className="corner br"></div></div></div></section><section className="summary-row"><Stat icon="▦" label="目前庫存" value={inventory.length} onClick={() => void onTab("items")} /><Stat icon="!" label="有期限紀錄" value={expiring} onClick={() => void onTab("items")} /><Stat icon="♙" label="共用物品" value={shared} onClick={() => void onTab("items")} /></section><section className="lower-grid"><div className="panel"><div className="panel-head"><div><h3>本機庫存</h3><p>顯示目前辨識使用者可見的真實資料</p></div><button onClick={() => void onTab("items")}>查看全部</button></div>{inventory.length ? inventory.slice(0, 2).map(item => <FoodRow key={item.item_id} item={item} />) : <p className="rag-hint">辨識使用者後，這裡會載入 SQLite 庫存。</p>}</div><div className="panel ask-teaser"><span className="spark">✦</span><h3>問問你的冰箱</h3><p>使用真實庫存與 FoodKeeper 一般保存指引檢索相關資料。</p><button onClick={() => void onTab("ask")}>開始提問 <b>→</b></button></div></section></div>;
+function EntranceIntro({ onSkip }: { onSkip: () => void }) {
+  return <button className="entrance-intro" onClick={onSkip} aria-label="跳過進場動畫">
+    <span className="intro-light"></span>
+    <span className="intro-fridge" aria-hidden="true"><i></i><b></b></span>
+    <span className="intro-wordmark">ChillMate</span>
+  </button>;
 }
 
-function Stat({ icon, label, value, onClick }: { icon: string; label: string; value: number; onClick: () => void }) { return <div className="stat-card"><span className="stat-icon mint">{icon}</span><div><small>{label}</small><strong>{value} <em>件</em></strong></div><button onClick={onClick}>查看 →</button></div>; }
+function HomeView({ inventory, online, user, onStart, onEnroll, onTab }: { inventory: InventoryItem[]; online: boolean; user: IdentifiedUser | null; onStart: () => void; onEnroll: () => void; onTab: (tab: Tab) => Promise<void> }) {
+  const expiring = inventory.filter(item => item.expires_on).length;
+  const shared = inventory.filter(item => Boolean(item.shared)).length;
+  return <div className="page-grid"><section className="hero-card"><div className="hero-copy"><h2>{user ? `你好，${user.display_name}` : "請登入以繼續使用"}</h2><p>{user ? "歡迎回來，選擇放入或取出物品開始使用。" : "站到鏡頭前，讓冰友辨識你並載入專屬庫存。"}</p><div className="identity-actions"><button className="primary-button" onClick={onStart} disabled={!online}><span className="scan-icon">◎</span>{online ? (user ? "重新辨識使用者" : "開始人臉辨識") : "等待本機 API"}<b>→</b></button><button className="secondary-button" onClick={onEnroll} disabled={!online}><span>＋</span>我是新人</button></div></div><div className="camera-visual" aria-hidden="true"><div className="camera-ring smart-core"><span className="orbit orbit-one"></span><span className="orbit orbit-two"></span><span className="orbit orbit-three"></span><div className="smart-fridge"><span className="ai-lens"><i></i></span><b></b><em></em></div><div className="signal-ring signal-one"></div><div className="signal-ring signal-two"></div><span className="scan-sweep"></span></div></div></section><section className="home-hub" aria-label="冰箱快速入口"><DashboardCard className="inventory-tile" icon="▦" eyebrow="INVENTORY" label="目前庫存" value={inventory.length} detail="查看所有已登記物品" onClick={() => void onTab("items")} /><DashboardCard className="expiry-tile" icon="◷" eyebrow="EXPIRY" label="有期限紀錄" value={expiring} detail="掌握需要優先處理的食物" onClick={() => void onTab("items")} /><DashboardCard className="shared-tile" icon="♙" eyebrow="SHARED" label="共用物品" value={shared} detail="每位成員都能安心取用" onClick={() => void onTab("items")} /><button className="dashboard-card ask-tile" onClick={() => void onTab("ask")}><span className="dashboard-icon">✦</span><span className="dashboard-copy"><small>FOODKEEPER RAG</small><strong>問問你的冰箱</strong><em>依真實庫存與保存指引回答你的問題</em></span><span className="card-arrow">開始提問 →</span></button></section></div>;
+}
+
+function DashboardCard({ className, icon, eyebrow, label, value, detail, onClick }: { className: string; icon: string; eyebrow: string; label: string; value: number; detail: string; onClick: () => void }) { return <button className={`dashboard-card ${className}`} onClick={onClick}><span className="dashboard-icon">{icon}</span><span className="dashboard-copy"><small>{eyebrow}</small><strong>{label}</strong><em>{detail}</em></span><span className="dashboard-value">{value}<small>件</small></span><span className="card-arrow">查看 →</span></button>; }
 function ItemsView({ items, identified }: { items: InventoryItem[]; identified: boolean }) { return <div className="page-stack"><div className="filter-row"><button className="chip selected">目前庫存 {items.length}</button></div>{!identified ? <UnavailableView title="請先辨識使用者" /> : items.length === 0 ? <UnavailableView title="目前沒有物品" /> : <div className="inventory-grid">{items.map(item => <article className="food-card" key={item.item_id}><div className="food-emoji">▣</div><div className="expiry-badge fresh">{item.expires_on ? `期限 ${item.expires_on}` : "未填期限"}</div><h3>{item.label}</h3><p>{item.shared ? "共用" : "個人"} · owner {item.owner_id.slice(0, 8)}</p><div className="card-meta"><span>放入時間</span><strong>{formatTime(item.put_at)}</strong></div></article>)}</div>}</div>; }
 function UnavailableView({ title, detail }: { title: string; detail?: string }) { return <section className="panel"><div className="panel-head"><div><h3>{title}</h3>{detail && <p>{detail}</p>}</div></div></section>; }
 function AskView({ identified }: { identified: boolean }) {
@@ -204,7 +216,6 @@ function AskView({ identified }: { identified: boolean }) {
 
   return <div className="ask-page"><div className="ask-intro"><span>✦</span><h2>問問你的冰箱</h2><p>根據你的目前庫存與 USDA FoodKeeper 一般保存指引檢索資料。</p></div><div className="prompt-box"><textarea aria-label="冰箱問題" value={question} onChange={event => setQuestion(event.target.value)} placeholder="例如：我週末要回家，哪些食物需要先處理？" disabled={loading} /><button aria-label="送出問題" onClick={() => void submit()} disabled={loading}>{loading ? "…" : "↑"}</button></div><div className="suggestions">{suggestions.map(text => <button key={text} onClick={() => setQuestion(text)}>{text}</button>)}</div>{!identified && <p className="rag-hint">請先回首頁辨識使用者，RAG 只會讀取該使用者的庫存。</p>}{askError && <p className="rag-hint">{askError}</p>}{answer && <section className="ai-answer"><div className="answer-label"><span>✦</span> FoodKeeper RAG · {answer.status}</div><p>{answer.answer}</p>{answer.sources.map(source => <details key={`${source.source}-${source.text}`}><summary>{source.source}</summary><p>{source.text}</p></details>)}</section>}</div>;
 }
-function FoodRow({ item }: { item: InventoryItem }) { return <div className="food-row"><div className="mini-food">▣</div><div><strong>{item.label}</strong><small>{item.shared ? "共用" : "個人"} · {formatTime(item.put_at)}</small></div><span className="expiry fresh">{item.expires_on ?? "無期限"}</span></div>; }
 function formatTime(value: string) { const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString("zh-TW"); }
 
 function EnrollmentForm({ name, setName, error, onSubmit }: { name: string; setName: (value: string) => void; error: string; onSubmit: () => void }) { return <form className="form-step enrollment-form" onSubmit={event => { event.preventDefault(); onSubmit(); }}><span className="step-label">新使用者註冊</span><h2>歡迎加入冰箱管家</h2><p>輸入名稱後站到鏡頭中央。拍攝時請先直視，再緩慢向左、向右轉動一點。</p><label htmlFor="new-user-name">顯示名稱</label><div className="date-input"><span>♙</span><input id="new-user-name" maxLength={80} value={name} onChange={event => setName(event.target.value)} placeholder="例如：小明" /></div><div className="enrollment-guide"><b>拍攝提醒</b><span>光線充足，畫面中只能有一張臉</span><span>不要戴口罩或遮住五官</span><span>過程約需數秒，影像不會儲存</span></div>{error && <p className="rag-hint">{error}</p>}<button className="primary-button full" disabled={!name.trim()}>開始建立人臉資料</button></form>; }

@@ -1,4 +1,4 @@
-# Fridge Guardian Frontend
+# 冰友 ChillMate Frontend
 
 互動式前端 prototype，對應專案的共享冰箱使用流程。
 
