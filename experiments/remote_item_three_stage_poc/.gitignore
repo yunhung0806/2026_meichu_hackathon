@@ -1,0 +1,10 @@
+.venv/
+.cache/
+data/
+results/
+__pycache__/
+*.py[cod]
+*.npy
+*.npz
+*.jpg
+*.png
