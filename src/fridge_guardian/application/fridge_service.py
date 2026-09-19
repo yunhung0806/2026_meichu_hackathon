@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from secrets import token_urlsafe
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fridge_guardian.application.coordinator import SessionCoordinator
@@ -145,15 +146,29 @@ class FridgeService:
             public["shared"] = bool(public["shared"])
             public["can_edit"] = bool(public["can_edit"])
             public["can_take"] = bool(public["can_take"])
+            if public["can_edit"]:
+                recipients = self.repo.connection.execute(
+                    """SELECT share.user_id, user.display_name
+                       FROM item_shares share
+                       JOIN users user ON user.user_id=share.user_id
+                       WHERE share.item_id=?
+                       ORDER BY user.created_at, user.user_id""",
+                    (public["item_id"],),
+                ).fetchall()
+                public["shared_user_ids"] = [entry["user_id"] for entry in recipients]
+                public["shared_user_names"] = [entry["display_name"] for entry in recipients]
+            else:
+                public["shared_user_ids"] = []
+                public["shared_user_names"] = []
             result.append(public)
         return result
 
     def update_inventory(self, token, item_id: str, changes: dict[str, object]):
         """Update owner-controlled metadata without changing item identity or presence."""
         login = self._login(token)
-        allowed = {"label", "expires_on", "shared"}
+        allowed = {"label", "expires_on", "shared", "shared_user_ids"}
         if not changes or set(changes) - allowed:
-            raise ValueError("Update label, expires_on, or shared only")
+            raise ValueError("Update label, expires_on, shared, or shared_user_ids only")
         item = self.repo.get_item(item_id)
         state = self.repo.connection.execute(
             "SELECT * FROM inventory WHERE item_id=?", (item_id,)
@@ -176,6 +191,26 @@ class FridgeService:
         shared = changes.get("shared")
         if "shared" in changes and type(shared) is not bool:
             raise ValueError("shared must be a boolean")
+        shared_user_ids = changes.get("shared_user_ids", [])
+        if "shared_user_ids" in changes:
+            if not isinstance(shared_user_ids, list) or any(
+                not isinstance(value, str) for value in shared_user_ids
+            ):
+                raise ValueError("shared_user_ids must be a list of user IDs")
+            shared_user_ids = list(dict.fromkeys(shared_user_ids))
+            if login.user_id in shared_user_ids:
+                raise ValueError("The owner cannot be a share recipient")
+            known_users = {user.user_id for user in self.repo.list_users()}
+            if any(value not in known_users for value in shared_user_ids):
+                raise ValueError("One or more selected sharing users are invalid")
+        if shared is True and shared_user_ids:
+            raise ValueError("Choose all-user sharing or selected users, not both")
+
+        sharing_changed = "shared" in changes or "shared_user_ids" in changes
+        effective_shared = bool(shared) if "shared" in changes else False
+        event_id = str(uuid4())
+        session_id = f"inventory-edit:{uuid4()}"
+        occurred_at = self.clock().isoformat()
 
         with self.repo.connection:
             if "label" in changes:
@@ -187,15 +222,31 @@ class FridgeService:
                     "UPDATE inventory SET expires_on=? WHERE item_id=?",
                     (expires_on.isoformat() if expires_on else None, item_id),
                 )
-            if "shared" in changes:
+            if sharing_changed:
                 self.repo.connection.execute(
                     "UPDATE inventory SET shared=? WHERE item_id=?",
-                    (int(shared), item_id),
+                    (int(effective_shared), item_id),
                 )
-                # A simple public/private edit must not leave hidden direct grants.
                 self.repo.connection.execute(
                     "DELETE FROM item_shares WHERE item_id=?", (item_id,)
                 )
+                self.repo.connection.executemany(
+                    "INSERT INTO item_shares(item_id, user_id, created_at) VALUES (?, ?, ?)",
+                    [(item_id, user_id, occurred_at) for user_id in shared_user_ids],
+                )
+            self.repo.connection.execute(
+                """INSERT INTO interaction_events(
+                       event_id, session_id, action, decision, occurred_at,
+                       user_id, item_id, identity_confidence, identity_status,
+                       identity_second_score, identity_margin, identity_valid_frames,
+                       identity_vote_ratio, item_confidence
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN_USER', 0, 0, 0, 0, 0)""",
+                (
+                    event_id, session_id, Action.INVENTORY_EDIT.value,
+                    DecisionCode.ITEM_UPDATED.value, occurred_at,
+                    login.user_id, item_id,
+                ),
+            )
         return next(
             row for row in self._inventory_rows(login.user_id, authorized_only=False)
             if row["item_id"] == item_id

@@ -169,7 +169,7 @@ export default function Home() {
     <section className="content">
       <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab)}</h1></div></header>
       {tab === "home" && flow === "idle" && <HomeView inventory={inventory} online={online} user={user} onStart={beginRecognition} onEnroll={beginEnrollment} onTab={selectTab} />}
-      {tab === "items" && <ItemsView items={inventory} identified={Boolean(user)} onRefresh={async () => { setInventory(await stationApi.inventory()); }} />}
+      {tab === "items" && <ItemsView items={inventory} members={members} identified={Boolean(user)} onRefresh={async () => { const [nextInventory, nextHistory] = await Promise.all([stationApi.inventory(), stationApi.history()]); setInventory(nextInventory); setHistory(nextHistory); }} />}
       {tab === "recipes" && (user ? <RecipeView key={`${user.user_id}:${user.access_token}`} /> : <UnavailableView title="請先辨識使用者" detail="回首頁辨識後，就能依你的庫存與保存期限推薦料理。" />)}
       {tab === "history" && <HistoryView events={history} identified={Boolean(user)} />}
       {tab === "ask" && <AskView identified={Boolean(user)} />}
@@ -231,9 +231,9 @@ function HomeView({ inventory, online, user, onStart, onEnroll, onTab }: { inven
 }
 
 function DashboardCard({ className, icon, eyebrow, label, value, detail, onClick }: { className: string; icon: string; eyebrow: string; label: string; value: number; detail: string; onClick: () => void }) { return <button className={`dashboard-card ${className}`} onClick={onClick}><span className="dashboard-icon">{icon}</span><span className="dashboard-copy"><small>{eyebrow}</small><strong>{label}</strong><em>{detail}</em></span><span className="dashboard-value">{value}<small>件</small></span><span className="card-arrow">查看 →</span></button>; }
-function ItemsView({ items, identified, onRefresh }: { items: InventoryItem[]; identified: boolean; onRefresh: () => Promise<void> }) {
+function ItemsView({ items, members, identified, onRefresh }: { items: InventoryItem[]; members: Member[]; identified: boolean; onRefresh: () => Promise<void> }) {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
-  const [editing, setEditing] = useState<{ itemId: string; label: string; expiry: string; shared: boolean } | null>(null);
+  const [editing, setEditing] = useState<{ itemId: string; label: string; expiry: string; sharedUserIds: string[] } | null>(null);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState("");
   const groups = groupInventoryItems(items);
@@ -244,7 +244,9 @@ function ItemsView({ items, identified, onRefresh }: { items: InventoryItem[]; i
       itemId: item.item_id,
       label: item.label,
       expiry: item.expires_on ?? "",
-      shared: Boolean(item.shared),
+      sharedUserIds: item.shared
+        ? members.map(member => member.user_id)
+        : item.shared_user_ids,
     });
   }
 
@@ -260,7 +262,8 @@ function ItemsView({ items, identified, onRefresh }: { items: InventoryItem[]; i
         () => stationApi.updateInventory(editing.itemId, {
           label: editing.label.trim(),
           expires_on: editing.expiry || null,
-          shared: editing.shared,
+          shared: false,
+          shared_user_ids: editing.sharedUserIds,
         }),
         onRefresh,
       );
@@ -301,11 +304,14 @@ function ItemsView({ items, identified, onRefresh }: { items: InventoryItem[]; i
                 <span>{inventorySharingLabel(item)}</span>
                 <span>{item.can_take ? "可取出" : "僅可查看"}</span>
               </div>
-              {canEditInventoryItem(item) ? <button className="secondary-button inventory-edit-button" onClick={() => beginEdit(item)}>編輯</button> : null}
+              {canEditInventoryItem(item) ? <button className="inventory-edit-button" onClick={() => beginEdit(item)}>✎ 編輯這筆</button> : null}
               {editing?.itemId === item.item_id && <div className="inventory-edit-form">
                 <label>名稱<input maxLength={200} value={editing.label} disabled={saving} onChange={event => setEditing({ ...editing, label: event.target.value })} /></label>
                 <label>期限<input type="date" value={editing.expiry} disabled={saving} onChange={event => setEditing({ ...editing, expiry: event.target.value })} /></label>
-                <label className="inventory-share-toggle"><input type="checkbox" checked={editing.shared} disabled={saving} onChange={event => setEditing({ ...editing, shared: event.target.checked })} /> 所有已登入使用者可取出</label>
+                <fieldset className="inventory-share-picker"><legend>選擇可共用的人</legend>
+                  {members.map(member => <label key={member.user_id}><input type="checkbox" checked={editing.sharedUserIds.includes(member.user_id)} disabled={saving} onChange={() => setEditing({ ...editing, sharedUserIds: editing.sharedUserIds.includes(member.user_id) ? editing.sharedUserIds.filter(value => value !== member.user_id) : [...editing.sharedUserIds, member.user_id] })} /> {member.display_name}</label>)}
+                  {members.length === 0 && <small>目前沒有其他已登錄使用者；此物品會保持私人。</small>}
+                </fieldset>
                 {editError && <p className="rag-hint">{editError}</p>}
                 <div className="inventory-edit-actions"><button className="secondary-button" disabled={saving} onClick={() => { setEditing(null); setEditError(""); }}>取消</button><button className="primary-button compact" disabled={saving || !editing.label.trim()} onClick={() => void saveEdit()}>{saving ? "儲存中…" : "儲存"}</button></div>
               </div>}
@@ -321,8 +327,8 @@ function HistoryView({ events, identified }: { events: HistoryEvent[]; identifie
   if (events.length === 0) return <UnavailableView title="目前沒有使用紀錄" />;
   return <section className="panel history-panel" aria-label="使用紀錄">
     {events.map(event => {
-      const allowed = event.decision.startsWith("ALLOW") || event.decision === "ITEM_REGISTERED";
-      const actionLabel = event.action === "PUT_IN" ? "放入" : "取出";
+      const allowed = event.decision.startsWith("ALLOW") || ["ITEM_REGISTERED", "ITEM_UPDATED"].includes(event.decision);
+      const actionLabel = event.action === "PUT_IN" ? "放入" : event.action === "TAKE_OUT" ? "取出" : "編輯";
       const itemLabel = event.item_label ?? event.item_id?.slice(0, 8) ?? "未辨識物品";
       const warningDetail = event.decision === "WARN_NOT_OWNER"
         ? event.viewer_role === "OWNER"
@@ -330,7 +336,7 @@ function HistoryView({ events, identified }: { events: HistoryEvent[]; identifie
           : `這是 ${event.related_user_name ?? "其他使用者"} 的物品，取出已阻止。`
         : null;
       return <article className="history-row" key={event.event_id}>
-        <span className={`event-icon ${allowed ? "green" : "orange"}`}>{event.action === "PUT_IN" ? "↓" : "↑"}</span>
+        <span className={`event-icon ${allowed ? "green" : "orange"}`}>{event.action === "PUT_IN" ? "↓" : event.action === "TAKE_OUT" ? "↑" : "✎"}</span>
         <div className="history-main"><strong>{actionLabel} · <em>{itemLabel}</em></strong><small>{warningDetail ?? event.decision}</small></div>
         <time dateTime={event.occurred_at}>{formatTime(event.occurred_at)}</time>
       </article>;

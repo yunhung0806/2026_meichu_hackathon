@@ -341,6 +341,73 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         )).json()["data"]["items"][0]
         self.assertFalse(row["can_take"])
 
+    async def test_owner_edit_selects_recipients_and_records_history(self):
+        stranger = self.repo.add_user("Stranger")
+        owner_token = await self.identify(self.owner)
+        stored = await self.put(owner_token, label="owner milk")
+
+        selected = await self.client.patch(
+            f"/api/v1/inventory/{stored['item_id']}",
+            headers=self.auth(owner_token),
+            json={
+                "label": "edited milk",
+                "shared": False,
+                "shared_user_ids": [self.other.user_id],
+            },
+        )
+        self.assertEqual(selected.status_code, 200, selected.text)
+        data = selected.json()["data"]
+        self.assertFalse(data["shared"])
+        self.assertEqual(data["shared_user_ids"], [self.other.user_id])
+        self.assertEqual(data["shared_user_names"], ["Other"])
+        self.assertTrue(self.repo.is_shared_with(stored["item_id"], self.other.user_id))
+        self.assertFalse(self.repo.is_shared_with(stored["item_id"], stranger.user_id))
+
+        other_token = await self.identify(self.other)
+        other_row = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(other_token)
+        )).json()["data"]["items"][0]
+        self.assertTrue(other_row["can_take"])
+        self.assertEqual(other_row["access_type"], "SHARED_DIRECT")
+        self.assertEqual(other_row["shared_user_ids"], [])
+
+        stranger_token = await self.identify(stranger)
+        stranger_row = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(stranger_token)
+        )).json()["data"]["items"][0]
+        self.assertFalse(stranger_row["can_take"])
+
+        history = await self.client.get(
+            "/api/v1/history", headers=self.auth(owner_token)
+        )
+        edit_event = history.json()["data"]["events"][0]
+        self.assertEqual(edit_event["action"], "INVENTORY_EDIT")
+        self.assertEqual(edit_event["decision"], "ITEM_UPDATED")
+        self.assertEqual(edit_event["item_id"], stored["item_id"])
+        self.assertEqual(edit_event["item_label"], "edited milk")
+
+        label_only = await self.client.patch(
+            f"/api/v1/inventory/{stored['item_id']}",
+            headers=self.auth(owner_token), json={"label": "still shared milk"},
+        )
+        self.assertEqual(label_only.status_code, 200, label_only.text)
+        self.assertTrue(self.repo.is_shared_with(stored["item_id"], self.other.user_id))
+
+    async def test_inventory_edit_rejects_invalid_share_selection(self):
+        owner_token = await self.identify(self.owner)
+        stored = await self.put(owner_token)
+        for payload in (
+            {"shared": True, "shared_user_ids": [self.other.user_id]},
+            {"shared_user_ids": [self.owner.user_id]},
+            {"shared_user_ids": ["injected-user"]},
+            {"shared_user_ids": None},
+        ):
+            response = await self.client.patch(
+                f"/api/v1/inventory/{stored['item_id']}",
+                headers=self.auth(owner_token), json=payload,
+            )
+            self.assertEqual(response.status_code, 422, (payload, response.text))
+
     async def test_same_label_records_keep_independent_identity_and_expiry_order(self):
         token = await self.identify(self.owner)
         late = await self.put(token, label="麥香", expires_on="2026-10-02")

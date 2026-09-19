@@ -73,6 +73,7 @@ class InventoryUpdateRequest(BaseModel):
     label: str | None = Field(default=None, max_length=200)
     expires_on: date | None = None
     shared: bool | None = None
+    shared_user_ids: list[str] | None = Field(default=None, max_length=50)
 
     @model_validator(mode="after")
     def validate_edit(self):
@@ -84,6 +85,10 @@ class InventoryUpdateRequest(BaseModel):
             raise ValueError("label must contain 1–200 characters")
         if "shared" in self.model_fields_set and self.shared is None:
             raise ValueError("shared must be a boolean")
+        if "shared_user_ids" in self.model_fields_set and self.shared_user_ids is None:
+            raise ValueError("shared_user_ids must be a list")
+        if self.shared is True and self.shared_user_ids:
+            raise ValueError("Choose all-user sharing or selected users, not both")
         return self
 
 

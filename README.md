@@ -112,7 +112,8 @@ Every authenticated fridge user can see every currently present record. This
 visibility is deliberately separate from authorization: only the owner can edit
 a record; only the owner or a user allowed by its sharing rule can select it for
 take-out. Owners may edit only the trimmed display label, optional package
-expiry date, and all-user shared/private setting. Item identity, ownership,
+expiry date, and selected sharing recipients. Each successful edit is recorded
+in local history. Item identity, ownership,
 embeddings, timestamps, and presence cannot be changed by this form.
 
 The inventory page groups records by trimmed, case-insensitive label only for

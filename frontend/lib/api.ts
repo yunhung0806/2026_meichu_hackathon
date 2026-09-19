@@ -16,6 +16,8 @@ export type InventoryItem = {
   access_type: "OWNER" | "SHARED_ALL" | "SHARED_DIRECT" | "PRIVATE_VISIBLE";
   can_edit: boolean;
   can_take: boolean;
+  shared_user_ids: string[];
+  shared_user_names: string[];
   put_at: string;
   expires_on: string | null;
 };
@@ -28,7 +30,7 @@ export type Member = {
 export type HistoryEvent = {
   event_id: string;
   session_id: string;
-  action: "PUT_IN" | "TAKE_OUT";
+  action: "PUT_IN" | "TAKE_OUT" | "INVENTORY_EDIT";
   decision: string;
   occurred_at: string;
   item_id: string | null;
@@ -228,6 +230,7 @@ export const stationApi = {
     label?: string;
     expires_on?: string | null;
     shared?: boolean;
+    shared_user_ids?: string[];
   }) {
     return request<InventoryItem>(`/api/v1/inventory/${encodeURIComponent(itemId)}`, {
       method: "PATCH",

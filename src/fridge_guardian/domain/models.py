@@ -13,6 +13,7 @@ def utc_now() -> datetime:
 class Action(str, Enum):
     PUT_IN = "PUT_IN"
     TAKE_OUT = "TAKE_OUT"
+    INVENTORY_EDIT = "INVENTORY_EDIT"
 
 
 class DecisionCode(str, Enum):
@@ -25,6 +26,7 @@ class DecisionCode(str, Enum):
     UNKNOWN_USER = "UNKNOWN_USER"
     AMBIGUOUS_USER = "AMBIGUOUS_USER"
     UNKNOWN_ITEM = "UNKNOWN_ITEM"
+    ITEM_UPDATED = "ITEM_UPDATED"
 
 
 class IdentityStatus(str, Enum):

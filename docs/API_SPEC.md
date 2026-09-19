@@ -269,6 +269,8 @@ Header: `Authorization: Bearer <access_token>`.
         "access_type": "SHARED_DIRECT",
         "can_edit": false,
         "can_take": true,
+        "shared_user_ids": [],
+        "shared_user_names": [],
         "put_at": "2026-09-19T08:08:00+00:00",
         "expires_on": "2026-09-22"
       }
@@ -292,15 +294,24 @@ Header: `Authorization: Bearer <access_token>`.
 The owner may send any non-empty subset of:
 
 ```json
-{"label": "麥香紅茶", "expires_on": "2026-09-25", "shared": true}
+{
+  "label": "麥香紅茶",
+  "expires_on": "2026-09-25",
+  "shared": false,
+  "shared_user_ids": ["opaque-user-id"]
+}
 ```
 
 `label` is trimmed and must contain 1–200 characters. `expires_on` is an ISO
-date or `null`. `shared` is a JSON boolean. Unknown fields, `item_id`, owner,
+date or `null`. `shared` is a JSON boolean retained for all-user compatibility;
+`shared_user_ids` selects specific registered users and cannot be combined with
+`shared=true`. Unknown recipients are rejected. Unknown fields, `item_id`, owner,
 timestamps, presence, and embeddings are rejected. Unknown rows return 404,
 valid non-owners return 403, and absent rows return 409. Setting `shared=false`
-also revokes legacy direct grants so the private setting is owner-only. The
-response is the updated public inventory representation.
+with an empty recipient list revokes direct grants so the item becomes
+owner-only. The response includes owner-visible recipient IDs/names using the
+same public inventory representation. Every successful update creates an
+`INVENTORY_EDIT` / `ITEM_UPDATED` local history event.
 
 The management inventory is global, but recipe and FoodKeeper/RAG retrieval
 continue to use only food the current user owns or may take through sharing.

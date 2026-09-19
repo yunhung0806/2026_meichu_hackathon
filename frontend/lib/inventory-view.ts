@@ -43,6 +43,7 @@ export function takeChoiceOwner(item: ItemCandidate): string {
 
 export function inventorySharingLabel(item: InventoryItem): string {
   if (item.shared) return "全體共用";
+  if (item.shared_user_names.length > 0) return `共用給 ${item.shared_user_names.join("、")}`;
   if (item.access_type === "SHARED_DIRECT") return "指定共用";
   return "私人";
 }

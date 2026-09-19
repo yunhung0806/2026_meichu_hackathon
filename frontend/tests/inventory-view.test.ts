@@ -14,6 +14,8 @@ function item(overrides: Partial<InventoryItem>): InventoryItem {
     access_type: "OWNER",
     can_edit: true,
     can_take: true,
+    shared_user_ids: [],
+    shared_user_names: [],
     put_at: "2026-09-20T01:00:00Z",
     expires_on: null,
     ...overrides,
@@ -46,6 +48,7 @@ test("take-out identity text includes expiry and owner without exposing UUID", (
 
 test("management sharing labels distinguish public, direct, and private access", () => {
   assert.equal(inventorySharingLabel(item({ shared: true })), "全體共用");
+  assert.equal(inventorySharingLabel(item({ shared: false, shared_user_ids: ["owner-b"], shared_user_names: ["B"] })), "共用給 B");
   assert.equal(inventorySharingLabel(item({ shared: false, access_type: "SHARED_DIRECT" })), "指定共用");
   assert.equal(inventorySharingLabel(item({ shared: false, access_type: "PRIVATE_VISIBLE" })), "私人");
   assert.equal(canEditInventoryItem(item({ can_edit: true })), true);
