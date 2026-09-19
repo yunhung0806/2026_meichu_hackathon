@@ -61,8 +61,49 @@ The API binds to `127.0.0.1:8000` by default. The frontend reads
 `NEXT_PUBLIC_FRIDGE_API_BASE_URL` and defaults to that address. Python owns the
 camera for the process lifetime, serializes station requests, and keeps login
 tokens only in memory. See [`docs/API_SPEC.md`](docs/API_SPEC.md) for the
-implemented routes and environment variables. “Ask the Fridge” retrieves real
-inventory-aware FoodKeeper passages and can send them to Lemonade on the same
+implemented routes and environment variables. After identifying, open 使用紀錄
+to see the latest 100 take-out decisions involving you or your items: taker,
+owner, item, time, and result. Records persist in SQLite across restarts;
+identify again after restarting. Non-owner warnings and unknown results are
+shown as attempts, not successful removals.
+
+### Ask the fridge: what can I cook?
+
+After identifying, open 問冰箱. The page lists your present ingredients with
+items expiring within three Taipei calendar days first, followed by up to five
+matching recipes. Recommendations show existing ingredients, missing main
+ingredients, pantry items to check, steps, and the local source. Expired package
+dates and items beyond the FoodKeeper reference window are excluded. FoodKeeper
+estimates are labeled separately from package dates. Recommendations never
+remove inventory and currently use only the identified owner's items.
+
+The seven bundled original recipe examples live in `data/knowledge/recipes/`.
+Ingredient retrieval uses explicit Chinese/English aliases, not embeddings;
+unknown labels need a matching alias or a clearer inventory name. Quantities
+are not tracked. Without a model, the page provides source-backed retrieval
+cards. For generated RAG explanations, start an already installed local Ollama
+model and set `$env:FRIDGE_OLLAMA_MODEL="YOUR_INSTALLED_MODEL"` before restarting
+the Python API. No model is downloaded automatically. If the model is offline,
+recipe cards remain available. `FRIDGE_RECIPE_DIR` can select another directory
+of JSON recipe files using the bundled schema.
+
+When `FRIDGE_OLLAMA_MODEL` is unset, recipe explanations reuse the configured
+Lemonade model described below. Without either model, recipe cards still work.
+
+Verify locally: `uv run python -m unittest tests.test_recipes tests.test_station_api`.
+For a physical demo, register 番茄 expiring today and 雞蛋 with a later date,
+then open 問冰箱: 番茄 should appear first and 番茄炒蛋 should be the first recipe.
+Take out the eggs, reopen the page, and check that eggs are now listed as missing.
+
+To verify history locally with fake camera/model adapters:
+`uv run python -m unittest tests.test_station_api tests.test_fridge_service`.
+For a manual check, have A store a shared item, then B identify and take it out.
+Both A and B should see B taking A's item; an unrelated user should not. Repeat
+with a private item: B receives a warning and A's inventory remains unchanged.
+
+### Food storage questions with Lemonade
+
+The storage question form retrieves inventory-aware FoodKeeper passages and can send them to Lemonade on the same
 PN54. Configure and start the API on Ubuntu with:
 
 ```bash
@@ -73,8 +114,7 @@ uv run fridge-guardian-api
 ```
 
 If the model variable is omitted, the API returns `LLM_NOT_CONFIGURED` with
-the retrieved sources instead of a mock answer. History remains visibly marked
-not connected.
+the retrieved sources instead of a mock answer. History is also connected.
 
 ## Controls and 2–3 minute demo
 

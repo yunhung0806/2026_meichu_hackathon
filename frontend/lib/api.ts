@@ -15,6 +15,19 @@ export type InventoryItem = {
   expires_on: string | null;
 };
 
+export type TakeOutEvent = {
+  event_id: string;
+  session_id: string;
+  occurred_at: string;
+  decision: string;
+  taker_id: string | null;
+  taker_name: string | null;
+  item_id: string | null;
+  label: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
+};
+
 export type OperationResult = {
   outcome: "ALLOW" | "WARNING" | "UNKNOWN";
   decision: string;
@@ -35,6 +48,33 @@ export type QuestionAnswer = {
 };
 
 type Envelope<T> = { success: true; data: T };
+export type RecipeIngredient = InventoryItem & {
+  days_left: number | null;
+  priority: boolean;
+  date_basis: "PACKAGE" | "FOODKEEPER" | "UNKNOWN";
+  reference_date: string | null;
+  status: string;
+};
+export type RecipeRecommendations = {
+  today: string;
+  soon_days: number;
+  ingredients: RecipeIngredient[];
+  excluded: RecipeIngredient[];
+  status: "OK" | "RETRIEVAL_ONLY" | "LLM_UNAVAILABLE" | "NO_MATCH" | "EMPTY_INVENTORY";
+  answer: string;
+  recipes: {
+    id: string;
+    title: string;
+    matched: string[];
+    missing: string[];
+    use_first: string[];
+    pantry: string[];
+    steps: string[];
+    source: string;
+    source_title: string;
+    provenance: string;
+  }[];
+};
 type ErrorEnvelope = { success: false; error: { code: string; message: string } };
 
 const API_BASE_URL = (
@@ -89,6 +129,16 @@ export const stationApi = {
 
   inventory() {
     return request<{ items: InventoryItem[] }>("/api/v1/inventory").then(({ items }) => items);
+  },
+
+  history() {
+    return request<{ events: TakeOutEvent[] }>("/api/v1/history").then(({ events }) => events);
+  },
+
+  recipes(question: string) {
+    return request<RecipeRecommendations>("/api/v1/recipes/recommend", {
+      method: "POST", body: JSON.stringify({ question }),
+    });
   },
 
   askQuestion(question: string, category: "recipes" | "storage" = "storage") {
