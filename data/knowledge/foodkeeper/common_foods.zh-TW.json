@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "title": "USDA FSIS FoodKeeper common refrigerated foods — curated MVP subset",
+    "dataset_url": "https://catalog.data.gov/dataset/fsis-foodkeeper-data",
+    "upstream_json": "https://www.foodsafety.gov/sites/default/files/foodkeeper_data_url_en.json",
+    "license": "CC0-1.0",
+    "catalog_last_modified": "2025-01-22",
+    "retrieved": "2026-09-19",
+    "scope": "Selected refrigerator guidance only; Traditional Chinese names and aliases are project-added mappings."
+  },
+  "records": [
+    {"name_en":"Apples","name_zh_tw":"蘋果","aliases":["apple","apples","蘋果"],"refrigerator_days":[28,42],"source_text":"Apples — 4–6 weeks refrigerated"},
+    {"name_en":"Citrus fruit","name_zh_tw":"柑橘類","aliases":["orange","oranges","citrus","柳橙","橘子","柑橘"],"refrigerator_days":[10,21],"source_text":"Citrus fruit — 10–21 days refrigerated"},
+    {"name_en":"Grapes","name_zh_tw":"葡萄","aliases":["grape","grapes","葡萄"],"refrigerator_days":[7,7],"source_text":"Grapes — 1 week refrigerated"},
+    {"name_en":"Broccoli","name_zh_tw":"花椰菜","aliases":["broccoli","花椰菜","青花菜"],"refrigerator_days":[5,5],"source_text":"Broccoli and broccoli raab — 5 days refrigerated"},
+    {"name_en":"Carrots","name_zh_tw":"胡蘿蔔","aliases":["carrot","carrots","胡蘿蔔","紅蘿蔔"],"refrigerator_days":[21,21],"source_text":"Carrots and parsnips — 3 weeks refrigerated"},
+    {"name_en":"Lettuce","name_zh_tw":"萵苣","aliases":["lettuce","萵苣","生菜"],"refrigerator_days":[7,14],"source_text":"Lettuce — 1–2 weeks refrigerated, depending on variety"},
+    {"name_en":"Spinach","name_zh_tw":"菠菜","aliases":["spinach","菠菜"],"refrigerator_days":[7,7],"source_text":"Leaf lettuce and spinach — 1 week refrigerated"},
+    {"name_en":"Mushrooms","name_zh_tw":"菇類","aliases":["mushroom","mushrooms","蘑菇","菇類","香菇"],"refrigerator_days":[7,7],"source_text":"Mushrooms — 1 week refrigerated"},
+    {"name_en":"Raw chicken","name_zh_tw":"生雞肉","aliases":["raw chicken","chicken","生雞肉","雞肉"],"refrigerator_days":[1,2],"source_text":"Raw chicken — 1–2 days refrigerated"},
+    {"name_en":"Ground beef","name_zh_tw":"生牛絞肉","aliases":["ground beef","生牛絞肉","牛絞肉"],"refrigerator_days":[1,2],"source_text":"Ground beef — 1–2 days refrigerated"},
+    {"name_en":"Raw beef cuts","name_zh_tw":"生牛肉塊","aliases":["raw beef","beef steak","生牛肉","牛排"],"refrigerator_days":[3,5],"source_text":"Raw beef cuts — 3–5 days refrigerated"},
+    {"name_en":"Raw pork cuts","name_zh_tw":"生豬肉塊","aliases":["raw pork","pork chop","生豬肉","豬排"],"refrigerator_days":[3,5],"source_text":"Raw pork cuts — 3–5 days refrigerated"},
+    {"name_en":"Raw fish","name_zh_tw":"生魚","aliases":["raw fish","fish","生魚","鮮魚","魚肉"],"refrigerator_days":[1,2],"source_text":"Raw lean or fatty fish — 1–2 days refrigerated"},
+    {"name_en":"Yogurt","name_zh_tw":"優格","aliases":["yogurt","yoghurt","優格","優酪乳"],"refrigerator_days":[7,14],"source_text":"Yogurt — 1–2 weeks refrigerated"},
+    {"name_en":"Eggs in shell","name_zh_tw":"帶殼雞蛋","aliases":["egg","eggs","雞蛋","蛋"],"refrigerator_days":[21,35],"source_text":"Eggs in shell — 3–5 weeks refrigerated"}
+  ]
+}
