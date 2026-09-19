@@ -94,21 +94,6 @@ class FridgeService:
             WHERE i.owner_id = ? AND s.present = 1 ORDER BY s.put_at
         """, (user.user_id,))]
 
-    def history(self, token):
-        """Persisted take-out decisions involving the signed-in user or their items."""
-        login = self._login(token)
-        return [dict(row) for row in self.repo.connection.execute("""
-            SELECT e.event_id, e.session_id, e.occurred_at, e.decision,
-                   e.user_id AS taker_id, taker.display_name AS taker_name,
-                   e.item_id, i.label, i.owner_id, owner.display_name AS owner_name
-            FROM interaction_events e
-            LEFT JOIN users taker ON taker.user_id = e.user_id
-            LEFT JOIN items i ON i.item_id = e.item_id
-            LEFT JOIN users owner ON owner.user_id = i.owner_id
-            WHERE e.action = 'TAKE_OUT' AND (e.user_id = ? OR i.owner_id = ?)
-            ORDER BY e.occurred_at DESC, e.rowid DESC LIMIT 100
-        """, (login.user_id, login.user_id))]
-
     def process(self, token, action, frames, options: PutOptions | None = None):
         login = self._login(token)
         action = Action(action)

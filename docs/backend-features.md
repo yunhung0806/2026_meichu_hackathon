@@ -23,15 +23,12 @@ coordinator directly.
 ## UI integration
 
 The supported browser integration is documented in [API_SPEC.md](API_SPEC.md):
-`GET /health`, `POST /station/identify`, `POST /station/operate`, and
-`POST /questions`, `GET /inventory`, `GET /history`, and `POST /recipes/recommend`, all under `/api/v1`. One Python process owns the camera and
-serializes station requests. Tokens stay in the existing in-memory
-`FridgeService` store. History and inventory-based recipe questions are connected
-to the browser. Reminders remain Python-only; storage questions use POST /questions.
-The recipe route uses `RecipeQuestions`: structured ingredient-alias retrieval
-over original JSON recipes, expiry prioritization, and optional local generation.
-The older `FoodQuestions.ask()` Markdown retrieval below remains available for
-Python callers and the storage question route. See API_SPEC.md for the recipe response and model configuration.
+`GET /health`, `POST /station/identify`, `POST /station/operate`,
+`GET /inventory`, and `POST /questions`, all under `/api/v1`. One Python
+process owns the camera and serializes station requests. Tokens stay in the
+existing in-memory `FridgeService` store. History and reminders do not
+currently have HTTP routes. Food questions return real RAG sources while LLM
+generation remains visibly unconfigured.
 
 The Python example below remains useful for non-HTTP callers and for features
 that have not been exposed over HTTP.
