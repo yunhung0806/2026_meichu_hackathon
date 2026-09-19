@@ -33,6 +33,15 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.enroll("../escape", np.zeros((2, 2, 3), dtype=np.uint8), [1.0], [1.0], {})
 
+    def test_saves_crop_under_unicode_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "測試路徑"
+            store = LocalTemplateStore(root)
+            crop = np.full((12, 16, 3), 180, dtype=np.uint8)
+            store.enroll("carton_a", crop, [1.0, 0.0], [0.0, 1.0], {})
+            self.assertEqual(len(list(root.rglob("*_crop.jpg"))), 1)
+            self.assertEqual(store.gallery()[0]["item_id"], "carton_a")
+
 
 if __name__ == "__main__":
     unittest.main()
