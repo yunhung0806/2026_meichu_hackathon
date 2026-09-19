@@ -21,8 +21,17 @@ class DecisionCode(str, Enum):
     ALLOW_OWNER = "ALLOW_OWNER"
     ALLOW_SHARED = "ALLOW_SHARED"
     WARN_NOT_OWNER = "WARN_NOT_OWNER"
+    NO_FACE = "NO_FACE"
     UNKNOWN_USER = "UNKNOWN_USER"
+    AMBIGUOUS_USER = "AMBIGUOUS_USER"
     UNKNOWN_ITEM = "UNKNOWN_ITEM"
+
+
+class IdentityStatus(str, Enum):
+    NO_FACE = "NO_FACE"
+    UNKNOWN_USER = "UNKNOWN_USER"
+    AMBIGUOUS_USER = "AMBIGUOUS_USER"
+    MATCHED = "MATCHED"
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,20 @@ class IdentityResult:
     user_id: str | None
     confidence: float
     observed_at: datetime
+    status: IdentityStatus = IdentityStatus.UNKNOWN_USER
+    second_score: float = 0.0
+    margin: float = 0.0
+    valid_frames: int = 0
+    vote_ratio: float = 0.0
+
+
+@dataclass(frozen=True)
+class FaceEnrollmentResult:
+    templates: tuple[bytes, ...]
+    candidate_frames: int
+    valid_frames: int
+    outliers_removed: int = 0
+    duplicates_removed: int = 0
 
 
 @dataclass(frozen=True)
@@ -86,6 +109,11 @@ class Decision:
     user_id: str | None = None
     item_id: str | None = None
     identity_confidence: float = 0.0
+    identity_status: IdentityStatus = IdentityStatus.UNKNOWN_USER
+    identity_second_score: float = 0.0
+    identity_margin: float = 0.0
+    identity_valid_frames: int = 0
+    identity_vote_ratio: float = 0.0
     item_confidence: float = 0.0
     decided_at: datetime = field(default_factory=utc_now)
 
@@ -100,4 +128,9 @@ class InteractionEvent:
     user_id: str | None = None
     item_id: str | None = None
     identity_confidence: float = 0.0
+    identity_status: IdentityStatus = IdentityStatus.UNKNOWN_USER
+    identity_second_score: float = 0.0
+    identity_margin: float = 0.0
+    identity_valid_frames: int = 0
+    identity_vote_ratio: float = 0.0
     item_confidence: float = 0.0

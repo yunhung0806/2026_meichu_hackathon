@@ -7,4 +7,5 @@ __pycache__/
 .coverage
 data/*.db
 data/*.db-*
+data/face_eval_*.csv
 models/*.onnx

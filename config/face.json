@@ -1,0 +1,20 @@
+{
+  "absolute_threshold": 0.55,
+  "margin_threshold": 0.12,
+  "minimum_valid_frames": 5,
+  "minimum_vote_ratio": 0.6,
+  "recognition_window_seconds": 1.6,
+  "recognition_candidate_frames": 16,
+  "enrollment_window_seconds": 3.6,
+  "enrollment_candidate_frames": 24,
+  "prepare_seconds": 1.0,
+  "minimum_enrollment_templates": 5,
+  "target_enrollment_templates": 8,
+  "detector_threshold": 0.7,
+  "minimum_face_size_px": 80,
+  "minimum_face_fraction": 0.12,
+  "blur_variance_threshold": 50.0,
+  "outlier_median_similarity": 0.5,
+  "duplicate_similarity": 0.998,
+  "template_top_k": 3
+}

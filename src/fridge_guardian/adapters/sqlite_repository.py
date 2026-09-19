@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     user_id TEXT REFERENCES users(user_id),
     item_id TEXT REFERENCES items(item_id),
     identity_confidence REAL NOT NULL,
+    identity_status TEXT NOT NULL DEFAULT 'UNKNOWN_USER',
+    identity_second_score REAL NOT NULL DEFAULT 0,
+    identity_margin REAL NOT NULL DEFAULT 0,
+    identity_valid_frames INTEGER NOT NULL DEFAULT 0,
+    identity_vote_ratio REAL NOT NULL DEFAULT 0,
     item_confidence REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_face_templates_user ON face_templates(user_id);
@@ -73,7 +78,27 @@ class SQLiteRepository:
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        self._migrate_interaction_events()
         self.connection.commit()
+
+    def _migrate_interaction_events(self) -> None:
+        """Add face diagnostics to databases created by the first MVP."""
+        existing = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(interaction_events)")
+        }
+        additions = {
+            "identity_status": "TEXT NOT NULL DEFAULT 'UNKNOWN_USER'",
+            "identity_second_score": "REAL NOT NULL DEFAULT 0",
+            "identity_margin": "REAL NOT NULL DEFAULT 0",
+            "identity_valid_frames": "INTEGER NOT NULL DEFAULT 0",
+            "identity_vote_ratio": "REAL NOT NULL DEFAULT 0",
+        }
+        for column, definition in additions.items():
+            if column not in existing:
+                self.connection.execute(
+                    f"ALTER TABLE interaction_events ADD COLUMN {column} {definition}"
+                )
 
     def close(self) -> None:
         self.connection.close()
@@ -175,8 +200,10 @@ class SQLiteRepository:
                 """
                 INSERT INTO interaction_events(
                     event_id, session_id, action, decision, occurred_at,
-                    user_id, item_id, identity_confidence, item_confidence
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    user_id, item_id, identity_confidence, identity_status,
+                    identity_second_score, identity_margin, identity_valid_frames,
+                    identity_vote_ratio, item_confidence
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.event_id,
@@ -187,6 +214,11 @@ class SQLiteRepository:
                     event.user_id,
                     event.item_id,
                     event.identity_confidence,
+                    event.identity_status.value,
+                    event.identity_second_score,
+                    event.identity_margin,
+                    event.identity_valid_frames,
+                    event.identity_vote_ratio,
                     event.item_confidence,
                 ),
             )
