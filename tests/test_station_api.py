@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import httpx
 
+from fridge_guardian.adapters.knowledge import FoodQuestions, LocalKnowledge
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
 from fridge_guardian.application.fridge_service import FridgeService
@@ -36,7 +37,8 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.service = FridgeService(coordinator)
         self.capture = FakeCameraCapture()
-        runtime = StationRuntime(self.service, self.capture)
+        questions = FoodQuestions(self.service, LocalKnowledge(self.tempdir.name))
+        runtime = StationRuntime(self.service, self.capture, questions=questions)
         self.app = create_app(runtime, allowed_origins=["http://localhost:3000"])
         self.lifespan = self.app.router.lifespan_context(self.app)
         await self.lifespan.__aenter__()
@@ -168,6 +170,33 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.json()["error"]["code"], "VALIDATION_ERROR")
+
+    async def test_foodkeeper_question_uses_authenticated_inventory(self):
+        token = await self.identify(self.owner)
+        await self.put(token, label="apple")
+        response = await self.client.post(
+            "/api/v1/questions",
+            headers=self.auth(token),
+            json={"question": "蘋果可以冷藏多久？", "category": "storage"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertEqual(data["status"], "LLM_NOT_CONFIGURED")
+        self.assertTrue(data["sources"])
+        self.assertEqual(data["sources"][0]["source"], "foodkeeper/蘋果")
+        self.assertIn("一般冷藏保存指引", data["sources"][0]["text"])
+
+    async def test_question_requires_valid_login_and_question(self):
+        missing = await self.client.post(
+            "/api/v1/questions", json={"question": "如何保存蘋果？"}
+        )
+        self.assertEqual(missing.status_code, 401)
+        token = await self.identify(self.owner)
+        blank = await self.client.post(
+            "/api/v1/questions", headers=self.auth(token), json={"question": "   "}
+        )
+        self.assertEqual(blank.status_code, 422)
+        self.assertEqual(blank.json()["error"]["code"], "VALIDATION_ERROR")
 
 
 if __name__ == "__main__":

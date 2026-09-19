@@ -60,9 +60,11 @@ npm run dev
 The API binds to `127.0.0.1:8000` by default. The frontend reads
 `NEXT_PUBLIC_FRIDGE_API_BASE_URL` and defaults to that address. Python owns the
 camera for the process lifetime, serializes station requests, and keeps login
-tokens only in memory. See [`docs/API_SPEC.md`](docs/API_SPEC.md) for the four
-implemented routes and environment variables. History and “Ask the Fridge” are
-visibly marked not connected; they do not show mock results.
+tokens only in memory. See [`docs/API_SPEC.md`](docs/API_SPEC.md) for the
+implemented routes and environment variables. “Ask the Fridge” retrieves real
+inventory-aware FoodKeeper passages; until an LLM is configured it returns
+`LLM_NOT_CONFIGURED` with those sources instead of a mock generated answer.
+History remains visibly marked not connected.
 
 ## Controls and 2–3 minute demo
 

@@ -2,8 +2,9 @@
 
 `FridgeService` is the local Python integration layer for the existing application.
 The implemented FastAPI station bridge in `fridge_guardian.station_api` now lets
-the browser use its identity, operation, and inventory methods. The camera CLI
-remains available and still uses the original coordinator directly.
+the browser use its identity, operation, inventory, and food-question retrieval
+methods. The camera CLI remains available and still uses the original
+coordinator directly.
 
 ## Reuse and additions
 
@@ -22,11 +23,12 @@ remains available and still uses the original coordinator directly.
 ## UI integration
 
 The supported browser integration is documented in [API_SPEC.md](API_SPEC.md):
-`GET /health`, `POST /station/identify`, `POST /station/operate`, and
-`GET /inventory`, all under `/api/v1`. One Python process owns the camera and
-serializes station requests. Tokens stay in the existing in-memory
-`FridgeService` store. History, reminders, and food questions do not currently
-have HTTP routes, and the frontend labels those views as not connected.
+`GET /health`, `POST /station/identify`, `POST /station/operate`,
+`GET /inventory`, and `POST /questions`, all under `/api/v1`. One Python
+process owns the camera and serializes station requests. Tokens stay in the
+existing in-memory `FridgeService` store. History and reminders do not
+currently have HTTP routes. Food questions return real RAG sources while LLM
+generation remains visibly unconfigured.
 
 The Python example below remains useful for non-HTTP callers and for features
 that have not been exposed over HTTP.

@@ -1,6 +1,6 @@
 # Fridge Guardian Station API
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 
 **Status:** Implemented local station bridge
 
@@ -8,7 +8,7 @@
 
 This document describes only the HTTP routes implemented by
 `fridge_guardian.station_api`. It does not claim that the earlier proposed
-cloud, PIN, upload, history, reminder, or RAG APIs exist.
+cloud, PIN, upload, history, reminder, or LLM generation APIs exist.
 
 ## Runtime and security boundary
 
@@ -42,6 +42,7 @@ All success responses use `{"success": true, "data": ...}`. Errors use:
 | POST | `/api/v1/station/identify` | No | Yes | Capture locally, identify one enrolled user, and issue a token |
 | POST | `/api/v1/station/operate` | Yes | Yes | Recheck the same user, recognize one item, and process `PUT_IN` or `TAKE_OUT` |
 | GET | `/api/v1/inventory` | Yes | No | Return the current identified user's present SQLite inventory |
+| POST | `/api/v1/questions` | Yes | No | Retrieve inventory-aware FoodKeeper/Markdown passages |
 
 ## `GET /api/v1/health`
 
@@ -161,6 +162,42 @@ Header: `Authorization: Bearer <access_token>`.
 The current `FridgeService` returns present items owned by the identified user.
 It does not expose biometric templates, raw images, removed records, or events.
 
+## `POST /api/v1/questions`
+
+Header: `Authorization: Bearer <access_token>`.
+
+```json
+{
+  "question": "我週末要回家，哪些食物需要先處理？",
+  "category": "storage"
+}
+```
+
+`question` must contain 1-2000 characters. `category` is `storage` by default
+and may also be `recipes`. Retrieval authenticates first, reads only the
+current user's present inventory, and returns FoodKeeper and matching local
+Markdown passages. Package expiry dates take priority over general FoodKeeper
+guidance.
+
+```json
+{
+  "success": true,
+  "data": {
+    "status": "LLM_NOT_CONFIGURED",
+    "answer": "已找到參考資料，本地 LLM 尚未設定。",
+    "sources": [
+      {
+        "source": "foodkeeper/蘋果",
+        "text": "apple：USDA FoodKeeper 的一般冷藏保存指引為 ..."
+      }
+    ]
+  }
+}
+```
+
+The RAG transport and sources are real. Until Lemonade is integrated, the API
+does not generate a prose answer and reports `LLM_NOT_CONFIGURED` explicitly.
+
 ## Local configuration
 
 | Variable | Default |
@@ -181,6 +218,6 @@ The frontend reads `NEXT_PUBLIC_FRIDGE_API_BASE_URL`, defaulting to
 ## Explicitly not implemented
 
 There are no HTTP routes here for history, PIN confirmation, image upload,
-Cloudflare D1, reminders, notification delivery, RAG, or question answering.
-The frontend labels history and “Ask the Fridge” as not connected rather than
-showing mock results.
+Cloudflare D1, reminders, notification delivery, or LLM generation. The
+frontend labels history as not connected and labels RAG results separately
+from the not-yet-connected LLM.

@@ -28,6 +28,12 @@ export type OperationResult = {
   decided_at: string;
 };
 
+export type QuestionAnswer = {
+  status: "OK" | "NO_SOURCES" | "LLM_NOT_CONFIGURED" | "LLM_UNAVAILABLE";
+  answer: string;
+  sources: { source: string; text: string }[];
+};
+
 type Envelope<T> = { success: true; data: T };
 type ErrorEnvelope = { success: false; error: { code: string; message: string } };
 
@@ -83,6 +89,13 @@ export const stationApi = {
 
   inventory() {
     return request<{ items: InventoryItem[] }>("/api/v1/inventory").then(({ items }) => items);
+  },
+
+  askQuestion(question: string, category: "recipes" | "storage" = "storage") {
+    return request<QuestionAnswer>("/api/v1/questions", {
+      method: "POST",
+      body: JSON.stringify({ question, category }),
+    });
   },
 
   clearToken() {
