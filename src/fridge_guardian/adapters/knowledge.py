@@ -242,7 +242,7 @@ class FoodQuestions:
         self.foodkeeper = foodkeeper if foodkeeper is not None else FoodKeeperGuide.bundled()
 
     def storage_guidance(self, token):
-        inventory = self.service.inventory(token)
+        inventory = self.service.accessible_inventory(token)
         timezone = getattr(self.service, "timezone", None)
         rows = self.foodkeeper.inventory_guidance(inventory, self.service._today(), timezone)
         return tuple(asdict(row) for row in rows)
@@ -260,7 +260,7 @@ class FoodQuestions:
         ) for item in selected if item.get("expires_on"))
 
     def ask(self, token, question, category="storage"):
-        inventory = self.service.inventory(token)  # authenticate before retrieval/generation
+        inventory = self.service.accessible_inventory(token)  # authenticate before retrieval/generation
         if not question.strip() or len(question) > 2000:
             raise ValueError("Question must contain 1–2000 characters")
         today = self.service._today().isoformat()

@@ -23,7 +23,7 @@ class RecipeQuestions:
         return normalize(label) in {normalize(alias) for alias in aliases}
 
     def recommend(self, token, question="現在可以煮什麼？"):
-        inventory = self.service.inventory(token)
+        inventory = self.service.accessible_inventory(token)
         if not question.strip() or len(question) > 2000:
             raise ValueError("Question must contain 1–2000 characters")
         today = self.service._today()

@@ -10,9 +10,12 @@ export type InventoryItem = {
   item_id: string;
   label: string;
   owner_id: string;
+  owner_display_name: string;
   owner_name?: string;
-  shared: number;
-  access_type: "OWNER" | "SHARED_ALL" | "SHARED_DIRECT";
+  shared: boolean;
+  access_type: "OWNER" | "SHARED_ALL" | "SHARED_DIRECT" | "PRIVATE_VISIBLE";
+  can_edit: boolean;
+  can_take: boolean;
   put_at: string;
   expires_on: string | null;
 };
@@ -54,6 +57,8 @@ export type ItemCandidate = {
   similarity?: number;
   shared: boolean | number;
   owner_id?: string;
+  owner_display_name?: string;
+  owner_name?: string;
   put_at?: string;
   expires_on?: string | null;
 };
@@ -217,6 +222,17 @@ export const stationApi = {
 
   inventory() {
     return request<{ items: InventoryItem[] }>("/api/v1/inventory").then(({ items }) => items);
+  },
+
+  updateInventory(itemId: string, payload: {
+    label?: string;
+    expires_on?: string | null;
+    shared?: boolean;
+  }) {
+    return request<InventoryItem>(`/api/v1/inventory/${encodeURIComponent(itemId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
   },
 
   members() {

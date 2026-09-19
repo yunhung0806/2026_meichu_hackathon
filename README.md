@@ -1,4 +1,4 @@
-# Fridge Guardian — Windows Local MVP
+# Fridge Guardian — Local Shared-Fridge MVP
 
 The optional [identity-first backend](docs/backend-features.md) adds private/shared
 inventory, manual expiry, owner reminders and configurable local RAG/LLM.
@@ -21,10 +21,11 @@ system mode uses an already-installed `ffplay`, `mpv`, `paplay`, or `play` and
 never installs packages. Keep unlicensed or personal audio outside Git; the
 configured file is local runtime data, not a repository artifact.
 
-This repository currently contains the first Windows technical/interaction
-MVP only. It does **not** claim the final competition path: PN54 deployment,
-MI300 fine-tuning, and the final item embedding model are deliberately out of
-scope for this iteration.
+The integrated flow is verified on the Windows development host. The
+repository has been statically audited for Ubuntu startup, but PN54 runtime,
+CPU model loading, iGPU/NPU acceleration, and performance remain unverified.
+See [the PN54 Linux startup audit](docs/PN54_LINUX_STARTUP.md); it explicitly
+records the CPU-compatible CLIP artifact blocker and the safe startup order.
 
 ## Fastest setup and start (PowerShell)
 
@@ -93,8 +94,8 @@ uv run fridge-guardian-api
 ```
 
 If the model variable is omitted, the API returns `LLM_NOT_CONFIGURED` with
-the retrieved sources instead of a mock answer. History remains visibly marked
-not connected.
+the retrieved sources instead of a mock answer. History is read from local
+SQLite interaction events.
 
 The sidebar's **食譜推薦** page uses the signed-in user's inventory and ranks
 recipes that consume food within three days of its package date first. Items
@@ -104,6 +105,23 @@ CC0 data under `data/knowledge/recipes`; set `FRIDGE_RECIPE_DIR` to load a
 different local recipe directory. When Lemonade is configured, the same local
 model turns the retrieved result into a grounded Traditional Chinese answer;
 the recipe cards remain available if the model is offline.
+
+### Transparent inventory management
+
+Every authenticated fridge user can see every currently present record. This
+visibility is deliberately separate from authorization: only the owner can edit
+a record; only the owner or a user allowed by its sharing rule can select it for
+take-out. Owners may edit only the trimmed display label, optional package
+expiry date, and all-user shared/private setting. Item identity, ownership,
+embeddings, timestamps, and presence cannot be changed by this form.
+
+The inventory page groups records by trimmed, case-insensitive label only for
+display (`麥香 × 3`). Expanding a card shows the independent owner, expiry,
+put-in time, sharing state, and take permission for each opaque `item_id`.
+Identical-looking items remain separate physical records. During take-out the
+user confirms a specific authorized record by name and expiry, with owner and
+put-in time as secondary cues; only that selected record is removed. Recipe and
+FoodKeeper/RAG retrieval do not use other users' visible private food.
 
 ## Controls and 2–3 minute demo
 

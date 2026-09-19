@@ -143,7 +143,10 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
     def auth(token):
         return {"Authorization": f"Bearer {token}"}
 
-    async def put(self, token, *, label="apple", shared=False, shared_user_ids=None):
+    async def put(
+        self, token, *, label="apple", shared=False, shared_user_ids=None,
+        expires_on=None,
+    ):
         self.identity.user_id = self.owner.user_id
         self.item_vision.status = "NO_MATCH"
         self.item_vision.candidates = []
@@ -161,6 +164,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
                 "action": "PUT_IN", "confirmed": True, "label": label,
                 "add_as_new": True, "shared": shared,
                 "shared_user_ids": shared_user_ids or [],
+                "expires_on": expires_on,
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -216,7 +220,10 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         stranger_items = (await self.client.get(
             "/api/v1/inventory", headers=self.auth(stranger_token)
         )).json()["data"]["items"]
-        self.assertEqual(stranger_items, [])
+        self.assertEqual([item["item_id"] for item in stranger_items], [stored["item_id"]])
+        self.assertEqual(stranger_items[0]["access_type"], "PRIVATE_VISIBLE")
+        self.assertFalse(stranger_items[0]["can_take"])
+        self.assertFalse(stranger_items[0]["can_edit"])
 
         self.identity.user_id = self.other.user_id
         self.item_vision.status = "MATCHED"
@@ -240,6 +247,146 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["data"]["decision"], "ALLOW_SHARED")
+
+    async def test_inventory_visibility_permissions_and_owner_edits(self):
+        owner_token = await self.identify(self.owner)
+        private = await self.put(
+            owner_token, label=" private milk ", expires_on="2026-09-25"
+        )
+        shared = await self.put(owner_token, label="shared tea", shared=True)
+        other_token = await self.identify(self.other)
+
+        visible = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(other_token)
+        )).json()["data"]["items"]
+        by_id = {item["item_id"]: item for item in visible}
+        self.assertEqual(set(by_id), {private["item_id"], shared["item_id"]})
+        self.assertFalse(by_id[private["item_id"]]["can_take"])
+        self.assertFalse(by_id[private["item_id"]]["can_edit"])
+        self.assertTrue(by_id[shared["item_id"]]["can_take"])
+        self.assertFalse(by_id[shared["item_id"]]["can_edit"])
+
+        edited = await self.client.patch(
+            f"/api/v1/inventory/{private['item_id']}",
+            headers=self.auth(owner_token),
+            json={"label": "milk tea", "expires_on": "2026-10-02", "shared": True},
+        )
+        self.assertEqual(edited.status_code, 200, edited.text)
+        self.assertEqual(edited.json()["data"]["label"], "milk tea")
+        self.assertEqual(edited.json()["data"]["expires_on"], "2026-10-02")
+        self.assertTrue(edited.json()["data"]["shared"])
+        self.assertTrue(edited.json()["data"]["can_edit"])
+
+        cleared = await self.client.patch(
+            f"/api/v1/inventory/{private['item_id']}",
+            headers=self.auth(owner_token),
+            json={"expires_on": None, "shared": False},
+        )
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertIsNone(cleared.json()["data"]["expires_on"])
+        self.assertFalse(cleared.json()["data"]["shared"])
+        after_private = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(other_token)
+        )).json()["data"]["items"]
+        private_row = next(item for item in after_private if item["item_id"] == private["item_id"])
+        self.assertFalse(private_row["can_take"])
+
+    async def test_inventory_edit_rejects_nonowner_unknown_and_forbidden_fields(self):
+        owner_token = await self.identify(self.owner)
+        stored = await self.put(owner_token)
+        other_token = await self.identify(self.other)
+
+        forbidden = await self.client.patch(
+            f"/api/v1/inventory/{stored['item_id']}",
+            headers=self.auth(other_token), json={"label": "stolen name"},
+        )
+        self.assertEqual(forbidden.status_code, 403, forbidden.text)
+        unknown = await self.client.patch(
+            f"/api/v1/inventory/{uuid4()}",
+            headers=self.auth(owner_token), json={"label": "unknown"},
+        )
+        self.assertEqual(unknown.status_code, 404, unknown.text)
+        for payload in (
+            {},
+            {"owner_id": self.other.user_id},
+            {"item_id": "replacement"},
+            {"present": False},
+            {"label": "   "},
+        ):
+            response = await self.client.patch(
+                f"/api/v1/inventory/{stored['item_id']}",
+                headers=self.auth(owner_token), json=payload,
+            )
+            self.assertEqual(response.status_code, 422, (payload, response.text))
+        current = self.repo.get_item(stored["item_id"])
+        self.assertEqual(current.owner_id, self.owner.user_id)
+        self.assertEqual(current.label, "apple")
+
+    async def test_setting_private_revokes_direct_shares(self):
+        owner_token = await self.identify(self.owner)
+        stored = await self.put(
+            owner_token, label="shared yogurt",
+            shared_user_ids=[self.other.user_id],
+        )
+        self.assertTrue(self.repo.is_shared_with(stored["item_id"], self.other.user_id))
+        response = await self.client.patch(
+            f"/api/v1/inventory/{stored['item_id']}",
+            headers=self.auth(owner_token), json={"shared": False},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(self.repo.is_shared_with(stored["item_id"], self.other.user_id))
+        other_token = await self.identify(self.other)
+        row = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(other_token)
+        )).json()["data"]["items"][0]
+        self.assertFalse(row["can_take"])
+
+    async def test_same_label_records_keep_independent_identity_and_expiry_order(self):
+        token = await self.identify(self.owner)
+        late = await self.put(token, label="麥香", expires_on="2026-10-02")
+        early = await self.put(token, label="麥香", expires_on="2026-09-23")
+        middle = await self.put(token, label="麥香", expires_on="2026-09-25")
+        rows = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(token)
+        )).json()["data"]["items"]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len({row["item_id"] for row in rows}), 3)
+        self.assertEqual(
+            [row["item_id"] for row in rows],
+            [early["item_id"], middle["item_id"], late["item_id"]],
+        )
+        self.assertEqual(
+            [row["expires_on"] for row in rows],
+            ["2026-09-23", "2026-09-25", "2026-10-02"],
+        )
+
+        self.identity.user_id = self.owner.user_id
+        self.item_vision.status = "AMBIGUOUS"
+        self.item_vision.candidates = [
+            {"item_id": late["item_id"], "similarity": 0.91},
+            {"item_id": early["item_id"], "similarity": 0.90},
+        ]
+        inspection = (await self.client.post(
+            "/api/v1/station/inspect", headers=self.auth(token),
+            json={"action": "TAKE_OUT"},
+        )).json()["data"]
+        result = await self.client.post(
+            "/api/v1/station/operate", headers=self.auth(token), json={
+                "inspection_id": inspection["inspection_id"],
+                "action": "TAKE_OUT", "confirmed": True,
+                "selected_item_id": middle["item_id"],
+            },
+        )
+        self.assertEqual(result.status_code, 200, result.text)
+        states = dict(self.repo.connection.execute(
+            "SELECT item_id, present FROM inventory WHERE item_id IN (?, ?, ?)",
+            (late["item_id"], early["item_id"], middle["item_id"]),
+        ).fetchall())
+        self.assertEqual(states, {
+            late["item_id"]: 1,
+            early["item_id"]: 1,
+            middle["item_id"]: 0,
+        })
 
     async def test_camera_preview_is_uncached_and_draws_item_roi(self):
         import cv2
@@ -300,6 +447,23 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             json={"question": "推薦料理"},
         )
         self.assertEqual(denied.status_code, 401)
+
+        other_token = await self.identify(self.other)
+        visible = await self.client.get(
+            "/api/v1/inventory", headers=self.auth(other_token)
+        )
+        self.assertEqual(len(visible.json()["data"]["items"]), 1)
+        scoped = await self.client.post(
+            "/api/v1/recipes/recommend",
+            headers=self.auth(other_token),
+            json={"question": "請推薦可以先處理菠菜的料理"},
+        )
+        self.assertEqual(scoped.status_code, 200, scoped.text)
+        self.assertEqual(scoped.json()["data"]["status"], "EMPTY_INVENTORY")
+        self.assertEqual(scoped.json()["data"]["ingredients"], [])
+
+        guidance = self.app.state.station.questions.storage_guidance(other_token)
+        self.assertEqual(guidance, ())
 
     async def test_put_in_inventory_and_owner_take_out(self):
         token = await self.identify(self.owner)

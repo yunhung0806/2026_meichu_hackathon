@@ -134,7 +134,13 @@ class ItemInspectionTests(unittest.TestCase):
             [row["item_id"] for row in self.service.inventory(recipient.token)],
             [result.decision.item_id],
         )
-        self.assertEqual(self.service.inventory(outsider.token), [])
+        outsider_inventory = self.service.inventory(outsider.token)
+        self.assertEqual(
+            [row["item_id"] for row in outsider_inventory],
+            [result.decision.item_id],
+        )
+        self.assertFalse(outsider_inventory[0]["can_take"])
+        self.assertEqual(self.service.accessible_inventory(outsider.token), [])
 
     def test_put_rejects_injected_share_user(self):
         inspection = self.inspect()
