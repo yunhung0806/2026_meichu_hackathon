@@ -3,7 +3,7 @@
 # then install official CLIP separately with --no-deps as shown in README.md.
 ftfy>=6.3,<7
 huggingface-hub>=0.34,<1
-numpy>=1.26,<3
+numpy>=1.26,<2.3
 Pillow>=10.4,<13
 regex>=2024.9
 safetensors>=0.4.5,<1

@@ -172,7 +172,14 @@ class RemoteItemPipeline:
     def _localize(self, image: Any) -> dict[str, Any]:
         started = time.perf_counter()
         inputs = self.grounding_processor(images=image, text=self.prompt, return_tensors="pt")
-        inputs = {name: value.to(self.device) for name, value in inputs.items()}
+        model_dtype = next(self.grounding_model.parameters()).dtype
+        inputs = {
+            name: value.to(
+                self.device,
+                dtype=model_dtype if value.is_floating_point() else value.dtype,
+            )
+            for name, value in inputs.items()
+        }
         with self.torch.inference_mode():
             outputs = self.grounding_model(**inputs)
         postprocess = self.grounding_processor.post_process_grounded_object_detection
@@ -255,7 +262,14 @@ class RemoteItemPipeline:
     def _embed(self, crop: Any, roi: Any) -> tuple[np.ndarray, np.ndarray, float]:
         started = time.perf_counter()
         inputs = self.dino_processor(images=[crop, roi], return_tensors="pt")
-        inputs = {name: value.to(self.device) for name, value in inputs.items()}
+        model_dtype = next(self.dino_model.parameters()).dtype
+        inputs = {
+            name: value.to(
+                self.device,
+                dtype=model_dtype if value.is_floating_point() else value.dtype,
+            )
+            for name, value in inputs.items()
+        }
         with self.torch.inference_mode():
             output = self.dino_model(**inputs)
             features = output.last_hidden_state[:, 0, :].detach().float().cpu().numpy()
