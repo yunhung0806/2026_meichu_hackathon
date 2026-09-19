@@ -22,6 +22,7 @@ from fridge_guardian.adapters.camera import OpenCVCamera
 from fridge_guardian.adapters.face import FaceRecognitionSettings, SFaceIdentityProvider
 from fridge_guardian.adapters.feedback import OpenCVFeedback
 from fridge_guardian.adapters.item import SpatialHistogramItemRecognizer
+from fridge_guardian.adapters.knowledge import FoodQuestions, LocalKnowledge
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
 from fridge_guardian.application.fridge_service import FridgeService, PutOptions
@@ -51,6 +52,11 @@ class OperateRequest(BaseModel):
     label: str | None = Field(default=None, max_length=200)
     shared: bool = False
     expires_on: date | None = None
+
+
+class QuestionRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    category: Literal["recipes", "storage"] = "storage"
 
 
 class CameraSessionCapture:
@@ -87,10 +93,12 @@ class StationRuntime:
         service: FridgeService,
         capture_frames: Callable[[], Sequence[FrameSample]],
         *,
+        questions: FoodQuestions | None = None,
         close: Callable[[], None] | None = None,
     ) -> None:
         self.service = service
         self.capture_frames = capture_frames
+        self.questions = questions
         self.close_callback = close
         self.lock = asyncio.Lock()
 
@@ -130,6 +138,9 @@ def build_runtime() -> StationRuntime:
         feedback = OpenCVFeedback()
         coordinator = SessionCoordinator(repository, identity, items, feedback)
         service = FridgeService(coordinator)
+        questions = FoodQuestions(
+            service, LocalKnowledge(PROJECT_ROOT / "data" / "knowledge")
+        )
         camera = OpenCVCamera(int(os.environ.get("FRIDGE_CAMERA_INDEX", "0")))
 
         def close() -> None:
@@ -137,7 +148,9 @@ def build_runtime() -> StationRuntime:
             camera.close()
             repository.close()
 
-        return StationRuntime(service, CameraSessionCapture(camera, settings), close=close)
+        return StationRuntime(
+            service, CameraSessionCapture(camera, settings), questions=questions, close=close
+        )
     except Exception:
         if camera is not None:
             camera.close()
@@ -223,7 +236,7 @@ def create_app(
             if runtime is None:
                 owned_runtime.close()
 
-    api = FastAPI(title="Fridge Guardian Station API", version="1.0.0", lifespan=lifespan)
+    api = FastAPI(title="Fridge Guardian Station API", version="1.1.0", lifespan=lifespan)
     api.add_middleware(
         CORSMiddleware,
         allow_origins=list(allowed_origins or _origins_from_environment()),
@@ -315,6 +328,34 @@ def create_app(
             except PermissionError as exc:
                 raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
             return _success({"items": items})
+
+    @api.post("/api/v1/questions")
+    async def ask_question(
+        payload: QuestionRequest,
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        station: StationRuntime = request.app.state.station
+        token = _token(authorization)
+        if station.questions is None:
+            raise ApiError(503, "RAG_NOT_CONFIGURED", "Food guidance is not configured.")
+        async with station.lock:
+            try:
+                answer = station.questions.ask(token, payload.question.strip(), payload.category)
+            except PermissionError as exc:
+                raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+            except ValueError as exc:
+                raise ApiError(422, "VALIDATION_ERROR", str(exc)) from exc
+            return _success(
+                {
+                    "status": answer.status,
+                    "answer": answer.text,
+                    "sources": [
+                        {"source": passage.source, "text": passage.text}
+                        for passage in answer.passages
+                    ],
+                }
+            )
 
     return api
 

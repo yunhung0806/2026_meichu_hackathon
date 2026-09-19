@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { stationApi } from "@/lib/api";
-import type { IdentifiedUser, InventoryItem, OperationResult } from "@/lib/api";
+import type { IdentifiedUser, InventoryItem, OperationResult, QuestionAnswer } from "@/lib/api";
 
 type Tab = "home" | "items" | "history" | "ask";
 type Flow = "idle" | "recognizing" | "menu" | "put" | "take" | "result" | "error";
@@ -100,7 +100,7 @@ export default function Home() {
       {tab === "home" && <HomeView inventory={inventory} online={online} onStart={beginRecognition} onTab={selectTab} />}
       {tab === "items" && <ItemsView items={inventory} identified={Boolean(user)} />}
       {tab === "history" && <UnavailableView title="使用紀錄尚未連線" detail="本次整合只連接辨識、PUT_IN／TAKE_OUT 與目前庫存；此頁不顯示模擬紀錄。" />}
-      {tab === "ask" && <UnavailableView title="問冰箱尚未連線" detail="RAG 與 Local LLM 不在本次整合範圍；此頁不會產生模擬回答。" />}
+      {tab === "ask" && <AskView identified={Boolean(user)} />}
     </section>
     {flow !== "idle" && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="冰箱操作"><div className="flow-card"><button className="close" onClick={closeFlow} aria-label="關閉">×</button>
       {flow === "recognizing" && <Recognizing text={label ? "正在辨識物品並登記" : "正在辨識使用者"} />}
@@ -119,12 +119,32 @@ function tabTitle(tab: Tab, user: IdentifiedUser | null) { return { home: user ?
 function HomeView({ inventory, online, onStart, onTab }: { inventory: InventoryItem[]; online: boolean; onStart: () => void; onTab: (tab: Tab) => Promise<void> }) {
   const expiring = inventory.filter(item => item.expires_on).length;
   const shared = inventory.filter(item => Boolean(item.shared)).length;
-  return <div className="page-grid"><section className="hero-card"><div className="hero-copy"><span className="pill">PN54 本機工作站</span><h2>要放東西，<br />還是拿東西？</h2><p>站到鏡頭前，後端會先確認是誰。<br />攝影機只由本機 Python API 控制。</p><button className="primary-button" onClick={onStart} disabled={!online}><span className="scan-icon">◎</span>{online ? "開始人臉辨識" : "等待本機 API"}<b>→</b></button><small className="safe-note">▣ 臉部資料與 token 只保存在這台裝置</small></div><div className="camera-visual"><div className="camera-ring"><div className="face-art"></div><div className="corner tl"></div><div className="corner tr"></div><div className="corner bl"></div><div className="corner br"></div></div><p><span></span> {online ? "API 已就緒" : "API 離線"}</p></div></section><section className="summary-row"><Stat icon="▦" label="目前庫存" value={inventory.length} onClick={() => void onTab("items")} /><Stat icon="!" label="有期限紀錄" value={expiring} onClick={() => void onTab("items")} /><Stat icon="♙" label="共用物品" value={shared} onClick={() => void onTab("items")} /></section><section className="lower-grid"><div className="panel"><div className="panel-head"><div><h3>本機庫存</h3><p>顯示目前辨識使用者可見的真實資料</p></div><button onClick={() => void onTab("items")}>查看全部</button></div>{inventory.length ? inventory.slice(0, 2).map(item => <FoodRow key={item.item_id} item={item} />) : <p className="rag-hint">辨識使用者後，這裡會載入 SQLite 庫存。</p>}</div><div className="panel ask-teaser"><span className="spark">✦</span><h3>問冰箱尚未連線</h3><p>本次只整合核心 station 流程，不提供模擬 RAG 回答。</p><button onClick={() => void onTab("ask")}>查看範圍說明 <b>→</b></button><small>未連線 · 非真實結果</small></div></section></div>;
+  return <div className="page-grid"><section className="hero-card"><div className="hero-copy"><span className="pill">PN54 本機工作站</span><h2>要放東西，<br />還是拿東西？</h2><p>站到鏡頭前，後端會先確認是誰。<br />攝影機只由本機 Python API 控制。</p><button className="primary-button" onClick={onStart} disabled={!online}><span className="scan-icon">◎</span>{online ? "開始人臉辨識" : "等待本機 API"}<b>→</b></button><small className="safe-note">▣ 臉部資料與 token 只保存在這台裝置</small></div><div className="camera-visual"><div className="camera-ring"><div className="face-art"></div><div className="corner tl"></div><div className="corner tr"></div><div className="corner bl"></div><div className="corner br"></div></div><p><span></span> {online ? "API 已就緒" : "API 離線"}</p></div></section><section className="summary-row"><Stat icon="▦" label="目前庫存" value={inventory.length} onClick={() => void onTab("items")} /><Stat icon="!" label="有期限紀錄" value={expiring} onClick={() => void onTab("items")} /><Stat icon="♙" label="共用物品" value={shared} onClick={() => void onTab("items")} /></section><section className="lower-grid"><div className="panel"><div className="panel-head"><div><h3>本機庫存</h3><p>顯示目前辨識使用者可見的真實資料</p></div><button onClick={() => void onTab("items")}>查看全部</button></div>{inventory.length ? inventory.slice(0, 2).map(item => <FoodRow key={item.item_id} item={item} />) : <p className="rag-hint">辨識使用者後，這裡會載入 SQLite 庫存。</p>}</div><div className="panel ask-teaser"><span className="spark">✦</span><h3>問問你的冰箱</h3><p>使用真實庫存與 FoodKeeper 一般保存指引檢索相關資料。</p><button onClick={() => void onTab("ask")}>開始提問 <b>→</b></button><small>RAG 已連線 · LLM 待接</small></div></section></div>;
 }
 
 function Stat({ icon, label, value, onClick }: { icon: string; label: string; value: number; onClick: () => void }) { return <div className="stat-card"><span className="stat-icon mint">{icon}</span><div><small>{label}</small><strong>{value} <em>件</em></strong></div><button onClick={onClick}>查看 →</button></div>; }
 function ItemsView({ items, identified }: { items: InventoryItem[]; identified: boolean }) { return <div className="page-stack"><div className="filter-row"><button className="chip selected">目前庫存 {items.length}</button></div>{!identified ? <UnavailableView title="請先辨識使用者" detail="庫存 API 需要本機記憶體 token；請回首頁開始辨識。" /> : items.length === 0 ? <UnavailableView title="目前沒有物品" detail="PUT_IN 成功後，SQLite 中的目前庫存會顯示在這裡。" /> : <div className="inventory-grid">{items.map(item => <article className="food-card" key={item.item_id}><div className="food-emoji">▣</div><div className="expiry-badge fresh">{item.expires_on ? `期限 ${item.expires_on}` : "未填期限"}</div><h3>{item.label}</h3><p>{item.shared ? "共用" : "個人"} · owner {item.owner_id.slice(0, 8)}</p><div className="card-meta"><span>放入時間</span><strong>{formatTime(item.put_at)}</strong></div></article>)}</div>}</div>; }
 function UnavailableView({ title, detail }: { title: string; detail: string }) { return <section className="panel"><div className="panel-head"><div><h3>{title}</h3><p>{detail}</p></div></div></section>; }
+function AskView({ identified }: { identified: boolean }) {
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState<QuestionAnswer | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [askError, setAskError] = useState("");
+  const suggestions = ["我週末要回家，哪些食物需要先處理？", "蘋果可以冷藏多久？", "哪些食物接近一般保存建議？"];
+
+  async function submit() {
+    if (!identified) { setAskError("請先回首頁進行人臉辨識。"); return; }
+    if (!question.trim()) { setAskError("請先輸入問題。"); return; }
+    setLoading(true);
+    setAskError("");
+    setAnswer(null);
+    try { setAnswer(await stationApi.askQuestion(question.trim())); }
+    catch (cause) { setAskError(cause instanceof Error ? cause.message : "RAG API 無法回答"); }
+    finally { setLoading(false); }
+  }
+
+  return <div className="ask-page"><div className="ask-intro"><span>✦</span><h2>問問你的冰箱</h2><p>根據你的目前庫存與 USDA FoodKeeper 一般保存指引檢索資料。</p></div><div className="prompt-box"><textarea aria-label="冰箱問題" value={question} onChange={event => setQuestion(event.target.value)} placeholder="例如：我週末要回家，哪些食物需要先處理？" disabled={loading} /><button aria-label="送出問題" onClick={() => void submit()} disabled={loading}>{loading ? "…" : "↑"}</button></div><div className="suggestions">{suggestions.map(text => <button key={text} onClick={() => setQuestion(text)}>{text}</button>)}</div>{!identified && <p className="rag-hint">請先回首頁辨識使用者，RAG 只會讀取該使用者的庫存。</p>}{askError && <p className="rag-hint">{askError}</p>}{answer && <section className="ai-answer"><div className="answer-label"><span>✦</span> FoodKeeper RAG · {answer.status}</div><p>{answer.answer}</p>{answer.sources.map(source => <details key={`${source.source}-${source.text}`}><summary>{source.source}</summary><p>{source.text}</p></details>)}</section>}</div>;
+}
 function FoodRow({ item }: { item: InventoryItem }) { return <div className="food-row"><div className="mini-food">▣</div><div><strong>{item.label}</strong><small>{item.shared ? "共用" : "個人"} · {formatTime(item.put_at)}</small></div><span className="expiry fresh">{item.expires_on ?? "無期限"}</span></div>; }
 function formatTime(value: string) { const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString("zh-TW"); }
 

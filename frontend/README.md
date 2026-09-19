@@ -8,10 +8,12 @@
 - 選擇放入或取出物品，並顯示真實 `ALLOW`、`WARNING` 或 `UNKNOWN`
 - 放入時由使用者確認名稱、個人／共用與選填期限
 - 從 SQLite inventory API 顯示目前辨識使用者的庫存
-- 清楚標示尚未連線的歷史與「問冰箱」頁面
+- 「問冰箱」使用目前登入者的 SQLite 庫存與 FoodKeeper RAG 來源
 
 核心流程不再使用 mock data 或計時器。攝影機只由 Python 後端控制；
-歷史、RAG 與 Local LLM 尚未串接，介面不會冒充真實結果。
+歷史與 Local LLM 尚未串接。RAG 已透過 FastAPI 回傳真實來源；在
+Lemonade 接上前，回答狀態會明確顯示 `LLM_NOT_CONFIGURED`，不會冒充
+生成式答案。
 
 ## 開發
 
