@@ -22,11 +22,13 @@ from fridge_guardian.adapters.camera import OpenCVCamera
 from fridge_guardian.adapters.face import FaceRecognitionSettings, SFaceIdentityProvider
 from fridge_guardian.adapters.feedback import OpenCVFeedback
 from fridge_guardian.adapters.item import SpatialHistogramItemRecognizer
+from fridge_guardian.adapters.item_vision import ItemVisionClient, ItemVisionClientError
 from fridge_guardian.adapters.knowledge import FoodQuestions, LemonadeLLM, LocalKnowledge
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
 from fridge_guardian.application.coordinator import EnrollmentError
-from fridge_guardian.application.fridge_service import FridgeService, PutOptions
+from fridge_guardian.application.fridge_service import FridgeService
+from fridge_guardian.application.item_inspection import InspectionError, ItemInspectionManager
 from fridge_guardian.application.recipes import RecipeQuestions
 from fridge_guardian.domain import Action, DecisionCode, FrameSample, utc_now
 
@@ -49,9 +51,17 @@ class ApiError(Exception):
         self.message = message
 
 
-class OperateRequest(BaseModel):
+class InspectRequest(BaseModel):
     action: Action
+
+
+class OperateRequest(BaseModel):
+    inspection_id: str = Field(min_length=16, max_length=128)
+    action: Action
+    confirmed: bool = False
     label: str | None = Field(default=None, max_length=200)
+    selected_item_id: str | None = Field(default=None, max_length=64)
+    add_as_new: bool = False
     shared: bool = False
     expires_on: date | None = None
 
@@ -116,6 +126,7 @@ class StationRuntime:
         capture_enrollment: Callable[[], Sequence[FrameSample]] | None = None,
         questions: FoodQuestions | None = None,
         recipes: RecipeQuestions | None = None,
+        item_inspections: ItemInspectionManager | None = None,
         close: Callable[[], None] | None = None,
     ) -> None:
         self.service = service
@@ -125,6 +136,7 @@ class StationRuntime:
         self.recipes = recipes or RecipeQuestions(
             service, PROJECT_ROOT / "data" / "knowledge" / "recipes"
         )
+        self.item_inspections = item_inspections
         self.close_callback = close
         self.lock = asyncio.Lock()
 
@@ -177,6 +189,11 @@ def build_runtime() -> StationRuntime:
         feedback = OpenCVFeedback()
         coordinator = SessionCoordinator(repository, identity, items, feedback)
         service = FridgeService(coordinator)
+        item_vision = ItemVisionClient(
+            os.environ.get("FRIDGE_ITEM_VISION_URL", "http://127.0.0.1:8765"),
+            float(os.environ.get("FRIDGE_ITEM_VISION_TIMEOUT", "60")),
+        )
+        item_inspections = ItemInspectionManager(service, item_vision)
         questions = FoodQuestions(
             service,
             LocalKnowledge(PROJECT_ROOT / "data" / "knowledge"),
@@ -199,7 +216,7 @@ def build_runtime() -> StationRuntime:
         capture = CameraSessionCapture(camera, settings)
         return StationRuntime(
             service, capture, capture_enrollment=capture.enrollment, questions=questions,
-            recipes=recipes, close=close
+            recipes=recipes, item_inspections=item_inspections, close=close
         )
     except Exception:
         if camera is not None:
@@ -286,7 +303,7 @@ def create_app(
             if runtime is None:
                 owned_runtime.close()
 
-    api = FastAPI(title="Fridge Guardian Station API", version="1.1.0", lifespan=lifespan)
+    api = FastAPI(title="Fridge Guardian Station API", version="1.2.0", lifespan=lifespan)
     api.add_middleware(
         CORSMiddleware,
         allow_origins=list(allowed_origins or _origins_from_environment()),
@@ -355,6 +372,32 @@ def create_app(
                 }
             )
 
+    @api.post("/api/v1/station/inspect")
+    async def inspect_item(
+        payload: InspectRequest,
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        station: StationRuntime = request.app.state.station
+        token = _token(authorization)
+        if station.item_inspections is None:
+            raise ApiError(503, "ITEM_VISION_UNAVAILABLE", "Item vision is not configured.")
+        async with station.lock:
+            try:
+                station.service._login(token)
+                result = station.item_inspections.inspect(
+                    token, payload.action, station.capture_frames()
+                )
+            except PermissionError as exc:
+                raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+            except InspectionError as exc:
+                raise ApiError(exc.status_code, exc.code, str(exc)) from exc
+            except ItemVisionClientError as exc:
+                raise ApiError(503, "ITEM_VISION_UNAVAILABLE", str(exc)) from exc
+            except ValueError as exc:
+                raise ApiError(422, "ITEM_GALLERY_INVALID", str(exc)) from exc
+            return _success(result)
+
     @api.post("/api/v1/station/operate")
     async def operate(
         payload: OperateRequest,
@@ -363,27 +406,25 @@ def create_app(
     ):
         station: StationRuntime = request.app.state.station
         token = _token(authorization)
-        options = None
-        if payload.action is Action.PUT_IN:
-            label = (payload.label or "").strip()
-            if not label:
-                raise ApiError(422, "VALIDATION_ERROR", "PUT_IN requires a confirmed item label.")
-            options = PutOptions(label, payload.shared, payload.expires_on)
+        if station.item_inspections is None:
+            raise ApiError(503, "ITEM_VISION_UNAVAILABLE", "Item vision is not configured.")
         async with station.lock:
             try:
-                # Reject expired/invalid tokens before opening a fresh camera session.
-                station.service._login(token)
-                result = station.service.process(
-                    token, payload.action, station.capture_frames(), options
+                result = station.item_inspections.commit(
+                    token,
+                    payload.inspection_id,
+                    payload.action,
+                    confirmed=payload.confirmed,
+                    label=payload.label,
+                    selected_item_id=payload.selected_item_id,
+                    add_as_new=payload.add_as_new,
+                    shared=payload.shared,
+                    expires_on=payload.expires_on,
                 )
             except PermissionError as exc:
-                message = str(exc)
-                changed_person = "person changed" in message.lower()
-                code = "PERSON_CHANGED" if changed_person else "UNAUTHORIZED"
-                status = 403 if changed_person else 401
-                raise ApiError(status, code, message) from exc
-            except ValueError as exc:
-                raise ApiError(422, "VALIDATION_ERROR", str(exc)) from exc
+                raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+            except InspectionError as exc:
+                raise ApiError(exc.status_code, exc.code, str(exc)) from exc
             return _success(_operation_data(result))
 
     @api.get("/api/v1/inventory")

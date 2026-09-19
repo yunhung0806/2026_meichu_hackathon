@@ -11,7 +11,7 @@ coordinator directly.
 | Capability | Implementation |
 | --- | --- |
 | Camera, face enrollment and matching | Existing OpenCV / YuNet / SFace |
-| Item-instance matching | Existing spatial HSV baseline |
+| Item-instance matching | Loopback `item-vision-v1`: Grounding DINO + CLIP v2 suggestions + DINOv2 gallery ranking |
 | Users, ownership, templates, events, feedback | Existing SQLite and coordinator |
 | Name before action menu | New five-minute local login, face rechecked for operations |
 | Private/shared, put time, optional expiry, current inventory | New additive inventory table |
@@ -23,7 +23,7 @@ coordinator directly.
 ## UI integration
 
 The supported browser integration is documented in [API_SPEC.md](API_SPEC.md):
-`GET /health`, `POST /station/identify`, `POST /station/operate`,
+`GET /health`, `POST /station/identify`, `POST /station/inspect`, `POST /station/operate`,
 `GET /inventory`, and `POST /questions`, all under `/api/v1`. One Python
 process owns the camera and serializes station requests. Tokens stay in the
 existing in-memory `FridgeService` store. History and reminders do not
@@ -113,12 +113,11 @@ retrieved passages, and current owner non-expired item labels; no faces,
 embeddings, access tokens, or user IDs. No model is downloaded or trained by
 this code. `OllamaLLM` remains available only for non-HTTP legacy callers.
 
-Semantic food classification differs from owned-item matching. Until a labeled
-fine-tuned model is supplied, the UI asks for the label via PutOptions. The HSV
-baseline cannot name foods. An exported instance recognizer can replace
-coordinator.item_recognizer and expose feature_kind; it must reject incompatible
-templates. Dataset/license, training, export/preprocessing, checksums, accuracy
-and PN54 latency are still required before claiming fine-tuned inference.
+Semantic food classification differs from owned-item matching. CLIP v2 only
+suggests an editable label; DINOv2 embeddings and opaque item IDs select
+inventory candidates. Inspection is non-mutating and short-lived; only a
+confirmed commit can update SQLite. Low category confidence never blocks
+put-in, and no automatic HSV fallback is used by the browser flow.
 
 ## Verification
 

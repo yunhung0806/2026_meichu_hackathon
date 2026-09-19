@@ -28,6 +28,38 @@ export type OperationResult = {
   decided_at: string;
 };
 
+export type ItemCandidate = {
+  item_id: string;
+  label: string;
+  similarity?: number;
+  shared: boolean | number;
+  owner_id?: string;
+  put_at?: string;
+  expires_on?: string | null;
+};
+
+export type ItemInspection = {
+  inspection_id: string;
+  action: "PUT_IN" | "TAKE_OUT";
+  expires_at: string;
+  identity: { status: "MATCHED"; user_id: string; display_name: string };
+  localization: { status: string; score: number; box: number[] | null };
+  category: {
+    status: "OK" | "UNKNOWN_CATEGORY" | "NOT_RUN";
+    top3: { label: string; score: number }[];
+  };
+  instance: {
+    status: "MATCHED" | "AMBIGUOUS" | "NO_MATCH" | "NOT_RUN";
+    candidates: ItemCandidate[];
+  };
+  suggested_label: string;
+  authorized_inventory: ItemCandidate[];
+  committable: boolean;
+  review_state: "READY" | "NO_AUTHORIZED_ITEMS";
+  review_message: string | null;
+  latency_ms: Record<string, number>;
+};
+
 export type QuestionAnswer = {
   status: "OK" | "NO_SOURCES" | "LLM_NOT_CONFIGURED" | "LLM_UNAVAILABLE";
   answer: string;
@@ -113,9 +145,20 @@ export const stationApi = {
     return user;
   },
 
+  inspect(action: "PUT_IN" | "TAKE_OUT") {
+    return request<ItemInspection>("/api/v1/station/inspect", {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+  },
+
   operate(payload: {
+    inspection_id: string;
     action: "PUT_IN" | "TAKE_OUT";
+    confirmed: boolean;
     label?: string;
+    selected_item_id?: string | null;
+    add_as_new?: boolean;
     shared?: boolean;
     expires_on?: string | null;
   }) {

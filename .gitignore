@@ -9,3 +9,8 @@ data/*.db
 data/*.db-*
 data/face_eval_*.csv
 models/*.onnx
+services/item_vision/.cache/
+services/item_vision/models/
+services/item_vision/*.pt
+services/item_vision/*.pth
+services/item_vision/*.safetensors
