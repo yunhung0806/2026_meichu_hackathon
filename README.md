@@ -1,5 +1,10 @@
 # Fridge Guardian — Windows Local MVP
 
+The optional [identity-first backend](docs/backend-features.md) adds private/shared
+inventory, manual expiry, owner reminders and configurable local RAG/LLM.
+This is a Python integration API; the camera CLI retains its original flow.
+Fine-tuned models and knowledge documents are not bundled.
+
 Fridge Guardian is a privacy-first prototype for a shared refrigerator. One
 real camera captures one visible person and one handheld item in the same
 short session. The user manually selects `PUT_IN` or `TAKE_OUT`; local face

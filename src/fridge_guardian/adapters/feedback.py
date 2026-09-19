@@ -30,7 +30,7 @@ class OpenCVFeedback:
         self.last_decision = decision
         self.notice = None
         self.last_published_at = time.monotonic()
-        if decision.code is DecisionCode.WARN_NOT_OWNER:
+        if decision.code is DecisionCode.WARN_NOT_OWNER or decision.warnings:
             self._warning_beep()
 
     @staticmethod
@@ -101,7 +101,7 @@ class OpenCVFeedback:
         if message is None and time.monotonic() - self.last_published_at < 8.0:
             if self.last_decision:
                 message = f"{self.last_decision.code.value}: {self.last_decision.message}"
-                color = self.COLORS[self.last_decision.code]
+                color = (40, 40, 240) if self.last_decision.warnings else self.COLORS[self.last_decision.code]
             elif self.notice:
                 message = self.notice
                 color = self.notice_color

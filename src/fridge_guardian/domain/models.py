@@ -116,6 +116,7 @@ class Decision:
     identity_vote_ratio: float = 0.0
     item_confidence: float = 0.0
     decided_at: datetime = field(default_factory=utc_now)
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
