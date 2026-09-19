@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone, timedelta
 
 from fridge_guardian.application.fridge_service import FridgeService, PutOptions
-from fridge_guardian.adapters.knowledge import LocalKnowledge, FoodQuestions
+from fridge_guardian.adapters.knowledge import FoodKeeperGuide, LocalKnowledge, FoodQuestions
 from fridge_guardian.domain import Action, DecisionCode
 import unittest
 import tests.test_flow as flow_tests
@@ -82,7 +82,9 @@ class FridgeServiceTests(unittest.TestCase):
         self.assertEqual(self.service.reminders(self.login.token), [])
         knowledge = LocalKnowledge(self.tempdir.name)
         questions = FoodQuestions(self.service, knowledge)
-        self.assertEqual(questions.ask(self.login.token, "如何保存蘋果").status, "NO_SOURCES")
+        result = questions.ask(self.login.token, "如何保存蘋果")
+        self.assertEqual(result.status, "LLM_NOT_CONFIGURED")
+        self.assertTrue(result.passages[0].source.startswith("foodkeeper/"))
         folder = knowledge.directory / "storage"
         folder.mkdir()
         (folder / "test.md").write_text("蘋果保存：這是測試資料。", encoding="utf-8")
@@ -95,3 +97,24 @@ class FridgeServiceTests(unittest.TestCase):
                 return "測試回答"
         questions.llm = FakeLLM()
         self.assertEqual(questions.ask(self.login.token, "如何保存蘋果").status, "OK")
+
+    def test_foodkeeper_guidance_is_not_an_expiry_date(self):
+        self.put()
+        questions = FoodQuestions(self.service, LocalKnowledge(self.tempdir.name))
+        guidance = questions.storage_guidance(self.login.token)
+        self.assertEqual(guidance[0]["food_name"], "蘋果")
+        self.assertEqual(guidance[0]["status"], "WITHIN_GUIDANCE")
+        self.assertEqual(guidance[0]["guidance_from"], "2026-10-18")
+        self.assertIsNone(self.service.inventory(self.login.token)[0]["expires_on"])
+
+    def test_package_expiry_takes_priority_over_foodkeeper(self):
+        self.put(expires=date(2026, 10, 1))
+        questions = FoodQuestions(self.service, LocalKnowledge(self.tempdir.name))
+        self.assertEqual(questions.storage_guidance(self.login.token), ())
+
+    def test_foodkeeper_alias_and_status(self):
+        guide = FoodKeeperGuide.bundled()
+        self.assertEqual(guide.lookup("有機菠菜")["name_en"], "Spinach")
+        self.put()
+        rows = FoodQuestions(self.service, LocalKnowledge(self.tempdir.name)).storage_guidance(self.login.token)
+        self.assertEqual(rows[0]["status"], "WITHIN_GUIDANCE")

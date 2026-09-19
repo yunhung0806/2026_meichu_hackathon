@@ -15,7 +15,7 @@ for the extended workflow. No extra web server or runtime packages are added.
 | Private/shared, put time, optional expiry, current inventory | New additive inventory table |
 | Expired take-out | Structured warning plus screen/beep feedback |
 | Day-before reminders | Persistent owner inbox with acknowledgement |
-| Recipe/storage questions | Markdown lexical retrieval and optional local Ollama |
+| Recipe/storage questions | FoodKeeper guidance, Markdown lexical retrieval and optional local Ollama |
 | Fine-tuned semantic labels | Model/data unavailable; not implemented or claimed trained |
 
 ## UI integration
@@ -42,6 +42,8 @@ for notice in service.reminders(login.token):
     # Call only after the owner dismisses the notification:
     service.acknowledge_reminder(login.token, notice["item_id"], notice["expires_on"])
 questions = FoodQuestions(service, LocalKnowledge("data/knowledge"))
+for item in questions.storage_guidance(login.token):
+    print(item)  # WITHIN_GUIDANCE / USE_SOON / BEYOND_GUIDANCE; never an expiry date
 # Once separately installed and running:
 # questions.llm = OllamaLLM(model="YOUR_INSTALLED_LOCAL_MODEL")
 answer = questions.ask(login.token, "現在可以煮甚麼？", category="recipes")
@@ -68,13 +70,27 @@ in-memory and expire after five minutes; log in again after restart.
 
 ## Knowledge and models
 
-Add legally usable UTF-8 Markdown to `data/knowledge/recipes/` and
+The bundled `data/knowledge/foodkeeper/common_foods.zh-TW.json` is a reviewed
+MVP subset of the public USDA FSIS FoodKeeper dataset. It contains common
+refrigerated foods, the source's English guidance, and project-added
+Traditional Chinese aliases. The upstream dataset is CC0-1.0 and its catalog
+metadata, retrieval date, and source URLs are recorded in the file. Keep those
+fields when replacing or expanding the snapshot.
+
+When `expires_on` is absent, `storage_guidance()` deterministically calculates
+a reference window from `put_at`. It returns `WITHIN_GUIDANCE`, `USE_SOON`, or
+`BEYOND_GUIDANCE` and sorts items needing attention first. It does not populate
+`expires_on`, call an LLM for date arithmetic, or claim that food is safe. A
+printed package date always takes priority, so those items are excluded from
+FoodKeeper guidance. Unmatched labels stay unmatched rather than being guessed.
+
+Add other legally usable UTF-8 Markdown to `data/knowledge/recipes/` and
 `data/knowledge/storage/`. Include source URL, version/date and license with
-claims in each paragraph. No food guidance corpus is bundled. English-token
-and Chinese-bigram retrieval is a lexical baseline, not embedding search.
-Returned passages identify file and paragraph/chunk. Generated claims and
-citations still require review. Guidance never writes an expiry date.
-Missing resources return NO_SOURCES, LLM_NOT_CONFIGURED or LLM_UNAVAILABLE.
+claims in each paragraph. English-token and Chinese-bigram retrieval remains a
+lexical baseline, not embedding search. FoodKeeper passages are placed before
+matching Markdown passages for storage questions. Returned passages identify
+their source. Generated claims and citations still require review. Missing
+resources return NO_SOURCES, LLM_NOT_CONFIGURED or LLM_UNAVAILABLE.
 
 The client uses Ollama `/api/generate`, `stream=false`, documented at
 https://github.com/ollama/ollama/blob/main/docs/api.md. Only loopback is used;
@@ -92,7 +108,7 @@ and PN54 latency are still required before claiming fine-tuned inference.
 ## Verification
 
 ```bash
-PYTHONPATH=src /usr/bin/python3.12 -m unittest tests.test_fridge_service tests.test_flow tests.test_policy tests.test_sqlite_repository tests.test_feedback -v
+PYTHONPATH=src /usr/bin/python3.12 -m unittest tests.test_foodkeeper tests.test_fridge_service tests.test_flow tests.test_policy tests.test_sqlite_repository tests.test_feedback -v
 # Full suite on a supported project environment with OpenCV installed:
 # python -m unittest discover -s tests -v
 ```
