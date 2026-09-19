@@ -11,9 +11,8 @@
 - 「問冰箱」使用目前登入者的 SQLite 庫存與 FoodKeeper RAG 來源
 
 核心流程不再使用 mock data 或計時器。攝影機只由 Python 後端控制；
-歷史與 Local LLM 尚未串接。RAG 已透過 FastAPI 回傳真實來源；在
-Lemonade 接上前，回答狀態會明確顯示 `LLM_NOT_CONFIGURED`，不會冒充
-生成式答案。
+歷史尚未串接。RAG 已透過 FastAPI 回傳真實來源，後端設定 Lemonade
+模型後會顯示生成答案；未設定時則明確顯示 `LLM_NOT_CONFIGURED`。
 
 ## 開發
 

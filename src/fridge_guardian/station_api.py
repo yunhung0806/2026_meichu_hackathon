@@ -22,7 +22,7 @@ from fridge_guardian.adapters.camera import OpenCVCamera
 from fridge_guardian.adapters.face import FaceRecognitionSettings, SFaceIdentityProvider
 from fridge_guardian.adapters.feedback import OpenCVFeedback
 from fridge_guardian.adapters.item import SpatialHistogramItemRecognizer
-from fridge_guardian.adapters.knowledge import FoodQuestions, LocalKnowledge
+from fridge_guardian.adapters.knowledge import FoodQuestions, LemonadeLLM, LocalKnowledge
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
 from fridge_guardian.application.fridge_service import FridgeService, PutOptions
@@ -111,6 +111,19 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(os.environ.get(name, str(default))).expanduser().resolve()
 
 
+def _lemonade_from_environment() -> LemonadeLLM | None:
+    model = os.environ.get("FRIDGE_LEMONADE_MODEL", "").strip()
+    if not model:
+        return None
+    return LemonadeLLM(
+        model=model,
+        base_url=os.environ.get(
+            "FRIDGE_LEMONADE_BASE_URL", "http://127.0.0.1:13305/v1"
+        ),
+        timeout=float(os.environ.get("FRIDGE_LEMONADE_TIMEOUT", "60")),
+    )
+
+
 def build_runtime() -> StationRuntime:
     """Create the real PN54/desktop adapters once during application startup."""
     settings = FaceRecognitionSettings.load(
@@ -139,7 +152,9 @@ def build_runtime() -> StationRuntime:
         coordinator = SessionCoordinator(repository, identity, items, feedback)
         service = FridgeService(coordinator)
         questions = FoodQuestions(
-            service, LocalKnowledge(PROJECT_ROOT / "data" / "knowledge")
+            service,
+            LocalKnowledge(PROJECT_ROOT / "data" / "knowledge"),
+            llm=_lemonade_from_environment(),
         )
         camera = OpenCVCamera(int(os.environ.get("FRIDGE_CAMERA_INDEX", "0")))
 

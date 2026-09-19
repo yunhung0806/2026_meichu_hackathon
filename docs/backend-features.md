@@ -17,7 +17,7 @@ coordinator directly.
 | Private/shared, put time, optional expiry, current inventory | New additive inventory table |
 | Expired take-out | Structured warning plus screen/beep feedback |
 | Day-before reminders | Persistent owner inbox with acknowledgement |
-| Recipe/storage questions | FoodKeeper guidance, Markdown lexical retrieval and optional local Ollama |
+| Recipe/storage questions | FoodKeeper guidance, Markdown retrieval and optional PN54 Lemonade generation |
 | Fine-tuned semantic labels | Model/data unavailable; not implemented or claimed trained |
 
 ## UI integration
@@ -36,7 +36,7 @@ that have not been exposed over HTTP.
 ```python
 from datetime import date
 from fridge_guardian.application.fridge_service import FridgeService, PutOptions
-from fridge_guardian.adapters.knowledge import LocalKnowledge, FoodQuestions, OllamaLLM
+from fridge_guardian.adapters.knowledge import LocalKnowledge, FoodQuestions, LemonadeLLM
 from fridge_guardian.domain import Action
 
 # Reuse SessionCoordinator(repository, identity, items, feedback).
@@ -57,8 +57,8 @@ for notice in service.reminders(login.token):
 questions = FoodQuestions(service, LocalKnowledge("data/knowledge"))
 for item in questions.storage_guidance(login.token):
     print(item)  # WITHIN_GUIDANCE / USE_SOON / BEYOND_GUIDANCE; never an expiry date
-# Once separately installed and running:
-# questions.llm = OllamaLLM(model="YOUR_INSTALLED_LOCAL_MODEL")
+# Once Lemonade and the model are separately installed and running:
+# questions.llm = LemonadeLLM(model="Gemma-3-4b-it-GGUF")
 answer = questions.ask(login.token, "現在可以煮甚麼？", category="recipes")
 answer = questions.ask(login.token, "蘋果如何保存？", category="storage")
 print(answer.status, answer.text, answer.passages)
@@ -105,11 +105,13 @@ matching Markdown passages for storage questions. Returned passages identify
 their source. Generated claims and citations still require review. Missing
 resources return NO_SOURCES, LLM_NOT_CONFIGURED or LLM_UNAVAILABLE.
 
-The client uses Ollama `/api/generate`, `stream=false`, documented at
-https://github.com/ollama/ollama/blob/main/docs/api.md. Only loopback is used;
-proxies and redirects are disabled. It sends questions, retrieved passages and
-current owner non-expired item labels; no faces, embeddings or user IDs.
-No model is downloaded or trained by this code.
+The station runtime uses Lemonade's OpenAI-compatible
+`/v1/chat/completions` endpoint when `FRIDGE_LEMONADE_MODEL` is set. The base
+URL defaults to `http://127.0.0.1:13305/v1`; only loopback HTTP URLs are
+accepted, and proxies and redirects are disabled. It sends questions,
+retrieved passages, and current owner non-expired item labels; no faces,
+embeddings, access tokens, or user IDs. No model is downloaded or trained by
+this code. `OllamaLLM` remains available only for non-HTTP legacy callers.
 
 Semantic food classification differs from owned-item matching. Until a labeled
 fine-tuned model is supplied, the UI asks for the label via PutOptions. The HSV

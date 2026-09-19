@@ -1,4 +1,4 @@
-"""Small local lexical RAG and optional loopback-only Ollama adapter."""
+"""Small local lexical RAG and loopback-only local LLM adapters."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+from urllib.parse import urlparse
 
 
 def terms(text):
@@ -157,6 +158,65 @@ class OllamaLLM:
         if not isinstance(result.get("response"), str) or not result["response"].strip():
             raise ValueError("Local LLM returned no answer")
         return result["response"]
+
+
+class LemonadeLLM:
+    """OpenAI-compatible client restricted to a loopback Lemonade server."""
+
+    def __init__(
+        self,
+        model,
+        base_url="http://127.0.0.1:13305/v1",
+        timeout=60,
+        opener=None,
+    ):
+        parsed = urlparse(base_url)
+        if not model:
+            raise ValueError("A Lemonade model name is required")
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Lemonade must use a loopback HTTP URL")
+        if parsed.path.rstrip("/") not in {"/v1", "/api/v1"}:
+            raise ValueError("Lemonade base URL must end in /v1 or /api/v1")
+        if float(timeout) <= 0:
+            raise ValueError("Lemonade timeout must be positive")
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout = float(timeout)
+        self.opener = opener or build_opener(ProxyHandler({}), _NoRedirect())
+
+    def generate(self, prompt):
+        payload = json.dumps({
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 512,
+            "stream": False,
+        }, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with self.opener.open(request, timeout=self.timeout) as response:
+            raw = response.read(1_000_001)
+        if len(raw) > 1_000_000:
+            raise ValueError("LLM response too large")
+        result = json.loads(raw)
+        choices = result.get("choices")
+        first = choices[0] if isinstance(choices, list) and choices else None
+        message = first.get("message") if isinstance(first, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Lemonade returned no answer")
+        return content.strip()
 
 
 @dataclass(frozen=True)
