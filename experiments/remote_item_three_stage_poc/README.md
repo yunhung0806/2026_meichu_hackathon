@@ -36,6 +36,12 @@ downloads approximately 1.12 GB. It reuses `/opt/venv`'s PyTorch/ROCm through a
 separate `--system-site-packages` venv; the requirements file intentionally
 does not contain torch or torchvision.
 
+Grounding DINO and DINOv2 run in FP32 for this compatibility POC. The pinned
+Transformers models produced mixed FP32/FP16 intermediate tensors with the
+verified ROCm 7.1 runtime, so FP16 was rejected after a real MI300X inference
+attempt. FP32 uses more accelerator memory but is the lower-risk choice on the
+available MI300X and does not change the model architecture or weights.
+
 ## MLSteam server
 
 Copy this directory to the same repository path on MLSteam, then in the

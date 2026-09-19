@@ -47,8 +47,12 @@ class LocalTemplateStore:
         template_id = uuid4().hex
         crop_path = item_dir / f"{template_id}_crop.jpg"
         temporary_crop = item_dir / f".{template_id}_crop.tmp.jpg"
-        if not cv2.imwrite(str(temporary_crop), crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 94]):
+        encoded, jpeg = cv2.imencode(
+            ".jpg", crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 94]
+        )
+        if not encoded:
             raise RuntimeError("Failed to save item crop")
+        temporary_crop.write_bytes(jpeg.tobytes())
         os.replace(temporary_crop, crop_path)
         embedding_path = item_dir / f"{template_id}.npz"
         temporary_embedding = item_dir / f".{template_id}.tmp"

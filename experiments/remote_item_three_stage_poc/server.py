@@ -78,7 +78,7 @@ class RemoteItemPipeline:
             grounding_snapshot,
             local_files_only=True,
             use_safetensors=True,
-            dtype=torch.float16,
+            dtype=torch.float32,
         ).to(self.device).eval()
 
         print("Preparing official OpenAI CLIP ViT-B/32...", flush=True)
@@ -110,7 +110,7 @@ class RemoteItemPipeline:
             dino_snapshot,
             local_files_only=True,
             use_safetensors=True,
-            dtype=torch.float16,
+            dtype=torch.float32,
         ).to(self.device).eval()
         print(f"Models ready on {self.device_name}", flush=True)
 
