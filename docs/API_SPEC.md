@@ -8,7 +8,7 @@
 
 This document describes only the HTTP routes implemented by
 `fridge_guardian.station_api`. It does not claim that the earlier proposed
-cloud, PIN, upload, history, reminder, or LLM generation APIs exist.
+cloud, PIN, upload, or reminder APIs exist.
 
 ## Runtime and security boundary
 
@@ -43,6 +43,9 @@ All success responses use `{"success": true, "data": ...}`. Errors use:
 | POST | `/api/v1/station/operate` | Yes | Yes | Recheck the same user, recognize one item, and process `PUT_IN` or `TAKE_OUT` |
 | GET | `/api/v1/inventory` | Yes | No | Return the current identified user's present SQLite inventory |
 | POST | `/api/v1/questions` | Yes | No | Retrieve inventory-aware FoodKeeper/Markdown passages |
+
+| GET | `/api/v1/history` | Yes | No | Latest 100 take-out decisions involving the user or their items |
+| POST | `/api/v1/recipes/recommend` | Yes | No | Expiry-prioritized recipe retrieval and optional local RAG |
 
 ## `GET /api/v1/health`
 
@@ -203,6 +206,51 @@ the backend sends those passages to the loopback Lemonade chat-completions API.
 Without that setting it reports `LLM_NOT_CONFIGURED`; an unavailable or invalid
 Lemonade response reports `LLM_UNAVAILABLE` while preserving the sources.
 
+## `GET /api/v1/history`
+
+Header: `Authorization: Bearer <access_token>`.
+
+Returns `{"success": true, "data": {"events": [...]}}`. Each event includes
+`event_id`, `session_id`, `occurred_at` (ISO timestamp), `decision`, `taker_id`,
+`taker_name`, `item_id`, `label`, `owner_id`, and `owner_name`. Unknown users or
+items have null identifying fields. Only `TAKE_OUT` events where the signed-in
+user is the actor or item owner are returned, newest first, at most 100.
+Missing, invalid, or expired tokens return `401 UNAUTHORIZED`.
+
+History reuses persisted interaction events, including earlier CLI events.
+Names and labels resolve from current user/item records, not historical snapshots.
+`ALLOW_OWNER` and `ALLOW_SHARED` indicate an allowed take-out decision;
+`WARN_NOT_OWNER` is an attempted take-out warning, and other decisions are
+unconfirmed. These are system decisions, not independent sensor confirmation
+that an item physically left the refrigerator. No camera capture is performed.
+
+## `POST /api/v1/recipes/recommend`
+
+Header: `Authorization: Bearer <access_token>`. JSON body:
+`{"question":"現在可以煮什麼？"}` (optional question; 1–2000 characters).
+
+The success envelope's `data` contains `today`, `soon_days` (3), `ingredients`,
+`excluded`, `recipes`, `answer`, and `status`. Ingredient records extend inventory
+with `days_left`, `priority`, `date_basis` (`PACKAGE`, `FOODKEEPER`, `UNKNOWN`),
+`reference_date`, and `status`. FoodKeeper reference dates use the lower bound
+of its storage guidance; they are not expiry dates. Beyond-guidance and expired
+items are excluded. Unknown dates remain explicitly marked for user checking.
+
+Recipe records contain `id`, `title`, `ingredients` (canonical names and aliases),
+`matched`, `missing`, `use_first`, `pantry`, `steps`, `source`, `source_title`, and
+`provenance`. Retrieval requires at least one matching ingredient. Rank uses
+urgent matched items first, missing ingredient count, matched ingredient count,
+then question-title lexical overlap. At most five results are returned.
+Names match normalized aliases exactly to avoid false matches such as eggplant
+or 蛋糕 matching eggs. Only the current owner's present inventory is used.
+
+Statuses: `OK` (LLM generated), `RETRIEVAL_ONLY` (no model configured),
+`LLM_UNAVAILABLE` (cards available but generation failed), `EMPTY_INVENTORY`,
+or `NO_MATCH`. Invalid/expired tokens return 401; invalid questions return 422.
+The endpoint never captures images or mutates inventory. Optional generation
+uses Ollama when FRIDGE_OLLAMA_MODEL is set; otherwise it reuses configured
+Lemonade. The respective model timeout applies; station requests remain serialized during generation.
+
 ## Local configuration
 
 | Variable | Default |
@@ -220,12 +268,14 @@ Lemonade response reports `LLM_UNAVAILABLE` while preserving the sources.
 | `FRIDGE_LEMONADE_BASE_URL` | `http://127.0.0.1:13305/v1` |
 | `FRIDGE_LEMONADE_TIMEOUT` | `60` seconds |
 
+| `FRIDGE_RECIPE_DIR` | `data/knowledge/recipes` under the project root |
+| `FRIDGE_OLLAMA_MODEL` | unset: retrieval only; set to an already installed local model for RAG |
+
 The frontend reads `NEXT_PUBLIC_FRIDGE_API_BASE_URL`, defaulting to
 `http://127.0.0.1:8000`.
 
 ## Explicitly not implemented
 
-There are no HTTP routes here for history, PIN confirmation, image upload,
-Cloudflare D1, reminders, or notification delivery. The frontend labels
-history as not connected. LLM generation is opt-in and requires an already
-installed/running Lemonade model on the same machine.
+There are no HTTP routes here for PIN confirmation, image upload,
+Cloudflare D1, reminders, notification delivery, or general-purpose question answering.
+Ask the Fridge supports recipe recommendations and FoodKeeper storage questions.
