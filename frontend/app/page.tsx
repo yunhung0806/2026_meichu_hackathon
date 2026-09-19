@@ -18,9 +18,11 @@ export default function Home() {
   const [expiry, setExpiry] = useState("");
   const [result, setResult] = useState<OperationResult | null>(null);
   const [error, setError] = useState("");
+  const [today, setToday] = useState("今天");
 
   useEffect(() => {
     stationApi.health().then(() => setOnline(true)).catch(() => setOnline(false));
+    setToday(new Intl.DateTimeFormat("zh-TW", { month: "long", day: "numeric", weekday: "long" }).format(new Date()));
   }, []);
 
   function showError(cause: unknown) {
@@ -82,7 +84,6 @@ export default function Home() {
     setResult(null);
   }
 
-  const today = new Intl.DateTimeFormat("zh-TW", { month: "long", day: "numeric", weekday: "long" }).format(new Date());
   return <main className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">F</span><div><strong>Fridge Guardian</strong><small>共享冰箱管家</small></div></div>
