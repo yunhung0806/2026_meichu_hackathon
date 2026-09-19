@@ -121,7 +121,7 @@ export default function Home() {
       <div className="sidebar-bottom"><div className="profile"><div className="avatar">{user?.display_name.slice(0, 1) ?? "?"}</div><div><strong>{user?.display_name ?? "尚未辨識"}</strong></div></div></div>
     </aside>
     <section className="content">
-      <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab, user)}</h1></div><div className="top-actions"><span className="status-dot">● {online ? "PN54 API 已連線" : "PN54 API 未連線"}</span></div></header>
+      <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab, user)}</h1></div></header>
       {tab === "home" && <HomeView inventory={inventory} online={online} onStart={beginRecognition} onEnroll={beginEnrollment} onTab={selectTab} />}
       {tab === "items" && <ItemsView items={inventory} identified={Boolean(user)} />}
       {tab === "recipes" && (user ? <RecipeView key={`${user.user_id}:${user.access_token}`} /> : <UnavailableView title="請先辨識使用者" detail="回首頁辨識後，就能依你的庫存與保存期限推薦料理。" />)}
@@ -151,7 +151,7 @@ function HomeView({ inventory, online, onStart, onEnroll, onTab }: { inventory: 
 }
 
 function Stat({ icon, label, value, onClick }: { icon: string; label: string; value: number; onClick: () => void }) { return <div className="stat-card"><span className="stat-icon mint">{icon}</span><div><small>{label}</small><strong>{value} <em>件</em></strong></div><button onClick={onClick}>查看 →</button></div>; }
-function ItemsView({ items, identified }: { items: InventoryItem[]; identified: boolean }) { return <div className="page-stack"><div className="filter-row"><button className="chip selected">目前庫存 {items.length}</button></div>{!identified ? <UnavailableView title="請先辨識使用者" detail="庫存 API 需要本機記憶體 token；請回首頁開始辨識。" /> : items.length === 0 ? <UnavailableView title="目前沒有物品" /> : <div className="inventory-grid">{items.map(item => <article className="food-card" key={item.item_id}><div className="food-emoji">▣</div><div className="expiry-badge fresh">{item.expires_on ? `期限 ${item.expires_on}` : "未填期限"}</div><h3>{item.label}</h3><p>{item.shared ? "共用" : "個人"} · owner {item.owner_id.slice(0, 8)}</p><div className="card-meta"><span>放入時間</span><strong>{formatTime(item.put_at)}</strong></div></article>)}</div>}</div>; }
+function ItemsView({ items, identified }: { items: InventoryItem[]; identified: boolean }) { return <div className="page-stack"><div className="filter-row"><button className="chip selected">目前庫存 {items.length}</button></div>{!identified ? <UnavailableView title="請先辨識使用者" /> : items.length === 0 ? <UnavailableView title="目前沒有物品" /> : <div className="inventory-grid">{items.map(item => <article className="food-card" key={item.item_id}><div className="food-emoji">▣</div><div className="expiry-badge fresh">{item.expires_on ? `期限 ${item.expires_on}` : "未填期限"}</div><h3>{item.label}</h3><p>{item.shared ? "共用" : "個人"} · owner {item.owner_id.slice(0, 8)}</p><div className="card-meta"><span>放入時間</span><strong>{formatTime(item.put_at)}</strong></div></article>)}</div>}</div>; }
 function UnavailableView({ title, detail }: { title: string; detail?: string }) { return <section className="panel"><div className="panel-head"><div><h3>{title}</h3>{detail && <p>{detail}</p>}</div></div></section>; }
 function AskView({ identified }: { identified: boolean }) {
   const [question, setQuestion] = useState("");
