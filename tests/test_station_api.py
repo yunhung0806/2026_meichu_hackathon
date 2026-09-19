@@ -30,6 +30,16 @@ class FakeCameraCapture:
         return [FrameSample(session_id, utc_now(), image.copy()) for _ in range(3)]
 
 
+class FakePreviewCamera:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.frame = np.full((100, 160, 3), 90, dtype=np.uint8)
+
+    def __call__(self):
+        self.calls += 1
+        return self.frame.copy()
+
+
 class FakeLLM:
     def __init__(self):
         self.prompt = ""
@@ -88,17 +98,23 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         self.repo = SQLiteRepository(Path(self.tempdir.name) / "station.db")
         self.identity = FakeIdentityProvider()
         self.items = FakeItemRecognizer()
+        self.feedback = RecordingFeedback()
         coordinator = SessionCoordinator(
-            self.repo, self.identity, self.items, RecordingFeedback()
+            self.repo, self.identity, self.items, self.feedback
         )
         self.service = FridgeService(coordinator)
         self.capture = FakeCameraCapture()
+        self.preview = FakePreviewCamera()
         self.item_vision = FakeItemVisionClient()
         self.inspections = ItemInspectionManager(self.service, self.item_vision)
         questions = FoodQuestions(self.service, LocalKnowledge(self.tempdir.name))
+        self.warning_audio = Path(self.tempdir.name) / "warning.mp3"
+        self.warning_audio.write_bytes(b"test audio")
         runtime = StationRuntime(
             self.service, self.capture, questions=questions,
+            preview_frame=self.preview,
             item_inspections=self.inspections,
+            warning_audio_path=self.warning_audio,
         )
         self.app = create_app(runtime, allowed_origins=["http://localhost:3000"])
         self.lifespan = self.app.router.lifespan_context(self.app)
@@ -127,7 +143,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
     def auth(token):
         return {"Authorization": f"Bearer {token}"}
 
-    async def put(self, token, *, label="apple", shared=False):
+    async def put(self, token, *, label="apple", shared=False, shared_user_ids=None):
         self.identity.user_id = self.owner.user_id
         self.item_vision.status = "NO_MATCH"
         self.item_vision.candidates = []
@@ -144,6 +160,7 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
                 "inspection_id": inspected.json()["data"]["inspection_id"],
                 "action": "PUT_IN", "confirmed": True, "label": label,
                 "add_as_new": True, "shared": shared,
+                "shared_user_ids": shared_user_ids or [],
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -158,6 +175,89 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         token = await self.identify(self.owner)
         self.assertTrue(token)
         self.assertEqual(self.capture.calls, 1)
+        members = await self.client.get(
+            "/api/v1/members", headers=self.auth(token)
+        )
+        self.assertEqual(members.status_code, 200, members.text)
+        self.assertEqual(
+            members.json()["data"]["users"],
+            [{"user_id": self.other.user_id, "display_name": "Other"}],
+        )
+
+        audio = await self.client.get(
+            "/api/v1/station/warning-audio", headers=self.auth(token)
+        )
+        self.assertEqual(audio.status_code, 200, audio.text)
+        self.assertEqual(audio.content, b"test audio")
+        self.assertEqual(audio.headers["cache-control"], "no-store")
+
+    async def test_warning_audio_requires_login(self):
+        response = await self.client.get("/api/v1/station/warning-audio")
+        self.assertEqual(response.status_code, 401)
+
+    async def test_selected_share_is_visible_and_takeable_only_by_recipient(self):
+        stranger = self.repo.add_user("Stranger")
+        owner_token = await self.identify(self.owner)
+        stored = await self.put(
+            owner_token,
+            label="shared yogurt",
+            shared_user_ids=[self.other.user_id],
+        )
+
+        other_token = await self.identify(self.other)
+        other_items = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(other_token)
+        )).json()["data"]["items"]
+        self.assertEqual([item["item_id"] for item in other_items], [stored["item_id"]])
+        self.assertEqual(other_items[0]["owner_name"], "Owner")
+        self.assertEqual(other_items[0]["access_type"], "SHARED_DIRECT")
+
+        stranger_token = await self.identify(stranger)
+        stranger_items = (await self.client.get(
+            "/api/v1/inventory", headers=self.auth(stranger_token)
+        )).json()["data"]["items"]
+        self.assertEqual(stranger_items, [])
+
+        self.identity.user_id = self.other.user_id
+        self.item_vision.status = "MATCHED"
+        self.item_vision.candidates = [
+            {"item_id": stored["item_id"], "similarity": 0.94}
+        ]
+        inspection = (await self.client.post(
+            "/api/v1/station/inspect",
+            headers=self.auth(other_token),
+            json={"action": "TAKE_OUT"},
+        )).json()["data"]
+        response = await self.client.post(
+            "/api/v1/station/operate",
+            headers=self.auth(other_token),
+            json={
+                "inspection_id": inspection["inspection_id"],
+                "action": "TAKE_OUT",
+                "confirmed": True,
+                "selected_item_id": stored["item_id"],
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["data"]["decision"], "ALLOW_SHARED")
+
+    async def test_camera_preview_is_uncached_and_draws_item_roi(self):
+        import cv2
+
+        response = await self.client.get("/api/v1/station/preview")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+        self.assertIn("no-store", response.headers["cache-control"])
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertTrue(response.content.startswith(b"\xff\xd8"))
+        image = cv2.imdecode(np.frombuffer(response.content, dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(image.shape[:2], (100, 160))
+        blue, green, red = image[28, 88]
+        self.assertGreater(int(green), int(blue) + 30)
+        self.assertGreater(int(green), int(red) + 30)
+        self.assertEqual(self.preview.calls, 1)
+        self.assertEqual(self.capture.calls, 0)
+        self.assertTrue(np.all(self.preview.frame == 90))
 
     async def test_browser_enrollment_creates_user_and_login(self):
         response = await self.client.post(
@@ -208,7 +308,9 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             "/api/v1/inventory", headers=self.auth(token)
         )
         self.assertEqual(inventory.status_code, 200)
-        self.assertEqual(inventory.json()["data"]["items"][0]["label"], "confirmed milk")
+        inventory_item = inventory.json()["data"]["items"][0]
+        self.assertEqual(inventory_item["label"], "confirmed milk")
+        self.assertEqual(inventory_item["owner_name"], "Owner")
 
         self.identity.user_id = self.owner.user_id
         self.item_vision.status = "MATCHED"
@@ -235,6 +337,18 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             (await self.client.get("/api/v1/inventory", headers=self.auth(token))).json()["data"]["items"],
             [],
         )
+        history = await self.client.get("/api/v1/history", headers=self.auth(token))
+        self.assertEqual(history.status_code, 200, history.text)
+        events = history.json()["data"]["events"]
+        self.assertEqual([event["action"] for event in events], ["TAKE_OUT", "PUT_IN"])
+        self.assertEqual([event["decision"] for event in events], ["ALLOW_OWNER", "ITEM_REGISTERED"])
+        self.assertEqual({event["item_label"] for event in events}, {"confirmed milk"})
+
+        other_token = await self.identify(self.other)
+        other_history = await self.client.get(
+            "/api/v1/history", headers=self.auth(other_token)
+        )
+        self.assertEqual(other_history.json()["data"]["events"], [])
 
     async def test_unauthorized_take_out_is_not_selectable_and_injection_is_rejected(self):
         owner_token = await self.identify(self.owner)
@@ -252,6 +366,23 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inspected.status_code, 200)
         inspection = inspected.json()["data"]
         self.assertEqual(inspection["instance"]["candidates"], [])
+        self.assertEqual(inspection["review_state"], "WARN_NOT_OWNER")
+        self.assertEqual(inspection["review_decision"], "WARN_NOT_OWNER")
+        self.assertEqual(self.feedback.decisions[-1].code.value, "WARN_NOT_OWNER")
+        actor_events = (await self.client.get(
+            "/api/v1/history", headers=self.auth(other_token)
+        )).json()["data"]["events"]
+        owner_events = (await self.client.get(
+            "/api/v1/history", headers=self.auth(owner_token)
+        )).json()["data"]["events"]
+        self.assertEqual(actor_events[0]["decision"], "WARN_NOT_OWNER")
+        self.assertEqual(actor_events[0]["viewer_role"], "ACTOR")
+        self.assertEqual(actor_events[0]["related_user_name"], "Owner")
+        owner_warning = next(
+            event for event in owner_events if event["decision"] == "WARN_NOT_OWNER"
+        )
+        self.assertEqual(owner_warning["viewer_role"], "OWNER")
+        self.assertEqual(owner_warning["related_user_name"], "Other")
         response = await self.client.post(
             "/api/v1/station/operate",
             headers=self.auth(other_token),
@@ -296,7 +427,6 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
             (await self.client.get("/api/v1/inventory", headers=self.auth(token))).json()["data"]["items"],
             [],
         )
-
         invalid = await self.client.get(
             "/api/v1/inventory", headers=self.auth("not-a-token")
         )

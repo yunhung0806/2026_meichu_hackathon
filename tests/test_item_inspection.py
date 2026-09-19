@@ -13,7 +13,7 @@ from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
 from fridge_guardian.application.fridge_service import FridgeService
 from fridge_guardian.application.item_inspection import InspectionError, ItemInspectionManager
-from fridge_guardian.domain import Action, FrameSample
+from fridge_guardian.domain import Action, DecisionCode, FrameSample
 from tests.fakes import FakeIdentityProvider, FakeItemRecognizer, RecordingFeedback
 
 
@@ -115,6 +115,32 @@ class ItemInspectionTests(unittest.TestCase):
         kinds = {template.feature_kind for template in self.repo.list_item_templates()}
         self.assertEqual(kinds, {EMBEDDING_KIND, ROI_EMBEDDING_KIND})
 
+    def test_put_can_share_with_selected_user_only(self):
+        stranger = self.repo.add_user("Stranger")
+        inspection = self.inspect()
+        result = self.commit(
+            inspection,
+            shared_user_ids=[self.other.user_id],
+        )
+        self.assertTrue(
+            self.repo.is_shared_with(result.decision.item_id, self.other.user_id)
+        )
+        self.assertFalse(
+            self.repo.is_shared_with(result.decision.item_id, stranger.user_id)
+        )
+        recipient = self.service._issue_login(self.other)
+        outsider = self.service._issue_login(stranger)
+        self.assertEqual(
+            [row["item_id"] for row in self.service.inventory(recipient.token)],
+            [result.decision.item_id],
+        )
+        self.assertEqual(self.service.inventory(outsider.token), [])
+
+    def test_put_rejects_injected_share_user(self):
+        inspection = self.inspect()
+        with self.assertRaisesRegex(InspectionError, "sharing users are invalid"):
+            self.commit(inspection, shared_user_ids=["injected-user"])
+
     def test_expired_and_completed_inspections_cannot_commit(self):
         expired = self.inspect()
         self.clock.now += timedelta(seconds=121)
@@ -195,6 +221,11 @@ class ItemInspectionTests(unittest.TestCase):
             inspection, add_as_new=True, selected_item_id=None, label="new physical item",
         )
         self.assertNotEqual(result.decision.item_id, ineligible.item_id)
+        present = self.repo.connection.execute(
+            "SELECT COUNT(*) FROM inventory WHERE present=1 AND item_id IN (?, ?)",
+            (ineligible.item_id, result.decision.item_id),
+        ).fetchone()[0]
+        self.assertEqual(present, 2)
 
     def test_backend_preserves_sidecar_candidate_order(self):
         first = self.add_present(label="first")
@@ -223,13 +254,49 @@ class ItemInspectionTests(unittest.TestCase):
         )
         self.assertEqual(taken.decision.item_id, shared.item_id)
 
+    def test_take_matched_private_item_warns_without_mutation(self):
+        own = self.add_present(label="authorized alternative")
+        private = self.add_present(owner=self.other, label="private", shared=False)
+        self.vision.status = "MATCHED"
+        self.vision.candidates = [{"item_id": private.item_id, "similarity": 0.94}]
+        result = self.inspect(Action.TAKE_OUT)
+
+        self.assertEqual(result["review_state"], "WARN_NOT_OWNER")
+        self.assertEqual(result["review_decision"], "WARN_NOT_OWNER")
+        self.assertEqual(result["instance"]["candidates"], [])
+        self.assertEqual(
+            {item["item_id"] for item in result["authorized_inventory"]},
+            {own.item_id},
+        )
+        self.assertTrue(result["committable"])
+        self.assertEqual(self.feedback.decisions[-1].code.value, "WARN_NOT_OWNER")
+        event_users = {
+            row["user_id"]
+            for row in self.repo.connection.execute(
+                "SELECT user_id FROM interaction_events WHERE session_id=?",
+                (self.manager.pending[result["inspection_id"]].session_id,),
+            )
+        }
+        self.assertEqual(event_users, {self.owner.user_id, self.other.user_id})
+        state = self.repo.connection.execute(
+            "SELECT present FROM inventory WHERE item_id=?", (private.item_id,)
+        ).fetchone()
+        self.assertEqual(state["present"], 1)
+
     def test_take_ambiguous_rejects_unauthorized_candidate(self):
         private = self.add_present(owner=self.other, label="private")
         self.vision.status = "AMBIGUOUS"
         self.vision.candidates = [{"item_id": private.item_id, "similarity": 0.9}]
         result = self.inspect(Action.TAKE_OUT)
         self.assertEqual(result["instance"]["candidates"], [])
-        self.assertEqual(result["review_state"], "NO_AUTHORIZED_ITEMS")
+        self.assertEqual(result["review_state"], "WARN_NOT_OWNER")
+        self.assertEqual(result["review_decision"], "WARN_NOT_OWNER")
+        self.assertEqual(self.feedback.decisions[-1].code, DecisionCode.WARN_NOT_OWNER)
+        event_count = self.repo.connection.execute(
+            "SELECT COUNT(*) FROM interaction_events WHERE session_id=?",
+            (self.manager.pending[result["inspection_id"]].session_id,),
+        ).fetchone()[0]
+        self.assertEqual(event_count, 2)
         with self.assertRaisesRegex(InspectionError, "not authorized"):
             self.commit(result, action="TAKE_OUT", label=None, add_as_new=False, selected_item_id=private.item_id)
 

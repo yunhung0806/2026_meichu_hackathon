@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import time
+from pathlib import Path
 
 from fridge_guardian.domain import Decision, DecisionCode
 
@@ -19,8 +22,19 @@ class OpenCVFeedback:
         DecisionCode.UNKNOWN_ITEM: (0, 180, 255),
     }
 
-    def __init__(self, debug: bool = False) -> None:
+    def __init__(
+        self,
+        debug: bool = False,
+        warning_audio_path: str | Path | None = None,
+        audio_enabled: bool = True,
+    ) -> None:
         self.debug = debug
+        self.audio_enabled = audio_enabled
+        self.warning_audio_path = (
+            Path(warning_audio_path).expanduser().resolve()
+            if warning_audio_path
+            else None
+        )
         self.last_decision: Decision | None = None
         self.last_published_at = 0.0
         self.notice: str | None = None
@@ -30,11 +44,18 @@ class OpenCVFeedback:
         self.last_decision = decision
         self.notice = None
         self.last_published_at = time.monotonic()
-        if decision.code is DecisionCode.WARN_NOT_OWNER or decision.warnings:
+        if self.audio_enabled and (
+            decision.code is DecisionCode.WARN_NOT_OWNER or decision.warnings
+        ):
             self._warning_beep()
 
-    @staticmethod
-    def _warning_beep() -> None:
+    def _warning_beep(self) -> None:
+        if self.warning_audio_path and self.warning_audio_path.is_file():
+            if os.name == "nt":
+                if self._play_windows_audio(self.warning_audio_path):
+                    return
+            elif self._play_linux_audio(self.warning_audio_path):
+                return
         if os.name == "nt":
             try:
                 import winsound
@@ -42,9 +63,87 @@ class OpenCVFeedback:
                 winsound.Beep(880, 220)
                 winsound.Beep(660, 260)
                 return
-            except RuntimeError:
-                pass
+            except (OSError, RuntimeError):
+                try:
+                    winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                    return
+                except (OSError, RuntimeError):
+                    pass
         print("\a", end="", flush=True)
+
+    @staticmethod
+    def _play_windows_audio(path: Path) -> bool:
+        """Play local audio asynchronously using Windows Media Foundation."""
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+        if powershell is None:
+            return False
+        script = r"""
+Add-Type -AssemblyName PresentationCore
+$player = [System.Windows.Media.MediaPlayer]::new()
+$player.Open([Uri]$env:FRIDGE_AUDIO_FILE)
+$deadline = [DateTime]::UtcNow.AddSeconds(3)
+while (-not $player.NaturalDuration.HasTimeSpan -and [DateTime]::UtcNow -lt $deadline) {
+    Start-Sleep -Milliseconds 100
+}
+$player.Volume = 1.0
+$player.Play()
+if ($player.NaturalDuration.HasTimeSpan) {
+    $durationMs = [Math]::Min(8000, [Math]::Max(1500, $player.NaturalDuration.TimeSpan.TotalMilliseconds + 300))
+} else {
+    $durationMs = 5000
+}
+Start-Sleep -Milliseconds ([int]$durationMs)
+$player.Stop()
+$player.Close()
+"""
+        child_env = os.environ.copy()
+        child_env["FRIDGE_AUDIO_FILE"] = str(path)
+        try:
+            subprocess.Popen(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    script,
+                ],
+                env=child_env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _play_linux_audio(path: Path) -> bool:
+        """Use an already-installed Linux player without changing the OS."""
+        players = (
+            ("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"),
+            ("mpv", "--no-video", "--really-quiet"),
+            ("paplay",),
+            ("play", "-q"),
+        )
+        for executable, *arguments in players:
+            player = shutil.which(executable)
+            if player is None:
+                continue
+            try:
+                subprocess.Popen(
+                    [player, *arguments, str(path)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError:
+                continue
+            return True
+        return False
 
     def notify(self, message: str, color: tuple[int, int, int] = (255, 255, 255)) -> None:
         self.notice = message

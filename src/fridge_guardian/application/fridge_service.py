@@ -97,10 +97,68 @@ class FridgeService:
     def inventory(self, token):
         user = self._login(token)
         return [dict(row) for row in self.repo.connection.execute("""
-            SELECT i.item_id, i.label, i.owner_id, s.shared, s.put_at, s.expires_on
-            FROM inventory s JOIN items i USING(item_id)
-            WHERE i.owner_id = ? AND s.present = 1 ORDER BY s.put_at
-        """, (user.user_id,))]
+            SELECT i.item_id, i.label, i.owner_id, u.display_name AS owner_name,
+                   CASE WHEN s.shared=1 OR EXISTS (
+                     SELECT 1 FROM item_shares x WHERE x.item_id=i.item_id
+                   ) THEN 1 ELSE 0 END AS shared,
+                   CASE
+                     WHEN i.owner_id=? THEN 'OWNER'
+                     WHEN s.shared=1 THEN 'SHARED_ALL'
+                     ELSE 'SHARED_DIRECT'
+                   END AS access_type,
+                   s.put_at, s.expires_on
+            FROM inventory s
+            JOIN items i USING(item_id)
+            JOIN users u ON u.user_id = i.owner_id
+            WHERE s.present=1 AND (
+              i.owner_id=? OR s.shared=1 OR EXISTS (
+                SELECT 1 FROM item_shares x
+                WHERE x.item_id=i.item_id AND x.user_id=?
+              )
+            )
+            ORDER BY s.put_at
+        """, (user.user_id, user.user_id, user.user_id))]
+
+    def members(self, token):
+        """List registered users that the signed-in user may share items with."""
+        user = self._login(token)
+        return [
+            {"user_id": member.user_id, "display_name": member.display_name}
+            for member in self.repo.list_users()
+            if member.user_id != user.user_id
+        ]
+
+    def history(self, token, *, limit=50):
+        """Return only the signed-in user's recent local interaction events."""
+        user = self._login(token)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("history limit must be between 1 and 100")
+        return [dict(row) for row in self.repo.connection.execute(
+            """SELECT e.event_id, e.session_id, e.action, e.decision,
+                      e.occurred_at, e.item_id, i.label AS item_label,
+                      owner.display_name AS owner_name,
+                      CASE WHEN i.owner_id=e.user_id THEN 'OWNER' ELSE 'ACTOR' END AS viewer_role,
+                      CASE
+                        WHEN e.decision='WARN_NOT_OWNER' AND i.owner_id=e.user_id THEN (
+                          SELECT actor.display_name
+                          FROM interaction_events attempt
+                          JOIN users actor ON actor.user_id=attempt.user_id
+                          WHERE attempt.session_id=e.session_id
+                            AND attempt.item_id=e.item_id
+                            AND attempt.decision='WARN_NOT_OWNER'
+                            AND attempt.user_id<>i.owner_id
+                          LIMIT 1
+                        )
+                        ELSE owner.display_name
+                      END AS related_user_name
+               FROM interaction_events e
+               LEFT JOIN items i ON i.item_id=e.item_id
+               LEFT JOIN users owner ON owner.user_id=i.owner_id
+               WHERE e.user_id=?
+               ORDER BY e.occurred_at DESC
+               LIMIT ?""",
+            (user.user_id, limit),
+        )]
 
     def process(self, token, action, frames, options: PutOptions | None = None):
         login = self._login(token)
