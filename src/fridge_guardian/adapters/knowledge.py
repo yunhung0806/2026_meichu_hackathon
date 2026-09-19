@@ -1,4 +1,4 @@
-"""Small local lexical RAG and optional loopback-only Ollama adapter."""
+"""Small local lexical RAG and loopback-only local LLM adapters."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
+from urllib.parse import urlparse
 
 
 def terms(text):
@@ -100,13 +101,23 @@ class FoodKeeperGuide:
         requested = self.lookup(question)
         selected = ([row for row in guidance if row.food_name == requested["name_zh_tw"]]
                     if requested else guidance)
-        return tuple(Passage(
+        passages = tuple(Passage(
             source=f"foodkeeper/{row.food_name}",
             text=(f"{row.label}：USDA FoodKeeper 的一般冷藏保存指引為 {row.source_text}；"
                   f"本次自放入起算的參考區間為 {row.guidance_from} 至 {row.guidance_until}，"
                   f"目前狀態 {row.status}。這是品質與保存的一般指引，不是包裝效期，"
                   "也不能單獨證明食品仍可安全食用。"),
         ) for row in selected)
+        if passages or requested is None:
+            return passages
+        minimum, maximum = requested["refrigerator_days"]
+        range_text = f"{minimum}–{maximum} 天" if minimum != maximum else f"{maximum} 天"
+        return (Passage(
+            source=f"foodkeeper/{requested['name_zh_tw']}",
+            text=(f"{requested['name_zh_tw']}：USDA FoodKeeper 的一般冷藏保存指引為"
+                  f" {requested['source_text']}（結構化區間 {range_text}）。"
+                  "這是一般指引，不是使用者庫存紀錄、包裝效期或食品安全保證。"),
+        ),)
 
 
 class LocalKnowledge:
@@ -159,6 +170,65 @@ class OllamaLLM:
         return result["response"]
 
 
+class LemonadeLLM:
+    """OpenAI-compatible client restricted to a loopback Lemonade server."""
+
+    def __init__(
+        self,
+        model,
+        base_url="http://127.0.0.1:13305/v1",
+        timeout=60,
+        opener=None,
+    ):
+        parsed = urlparse(base_url)
+        if not model:
+            raise ValueError("A Lemonade model name is required")
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Lemonade must use a loopback HTTP URL")
+        if parsed.path.rstrip("/") not in {"/v1", "/api/v1"}:
+            raise ValueError("Lemonade base URL must end in /v1 or /api/v1")
+        if float(timeout) <= 0:
+            raise ValueError("Lemonade timeout must be positive")
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout = float(timeout)
+        self.opener = opener or build_opener(ProxyHandler({}), _NoRedirect())
+
+    def generate(self, prompt):
+        payload = json.dumps({
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 512,
+            "stream": False,
+        }, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with self.opener.open(request, timeout=self.timeout) as response:
+            raw = response.read(1_000_001)
+        if len(raw) > 1_000_000:
+            raise ValueError("LLM response too large")
+        result = json.loads(raw)
+        choices = result.get("choices")
+        first = choices[0] if isinstance(choices, list) and choices else None
+        message = first.get("message") if isinstance(first, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Lemonade returned no answer")
+        return content.strip()
+
+
 @dataclass(frozen=True)
 class Answer:
     status: str
@@ -177,6 +247,18 @@ class FoodQuestions:
         rows = self.foodkeeper.inventory_guidance(inventory, self.service._today(), timezone)
         return tuple(asdict(row) for row in rows)
 
+    def _package_date_passages(self, question, inventory):
+        requested = self.foodkeeper.lookup(question)
+        selected = inventory
+        if requested is not None:
+            selected = [item for item in inventory
+                        if self.foodkeeper.lookup(item["label"]) == requested]
+        return tuple(Passage(
+            source=f"inventory/package-date/{item['label']}",
+            text=(f"{item['label']}：使用者記錄的包裝期限為 {item['expires_on']}。"
+                  "此日期來自使用者輸入，優先於一般 FoodKeeper 保存指引。"),
+        ) for item in selected if item.get("expires_on"))
+
     def ask(self, token, question, category="storage"):
         inventory = self.service.inventory(token)  # authenticate before retrieval/generation
         if not question.strip() or len(question) > 2000:
@@ -188,9 +270,13 @@ class FoodQuestions:
         if category == "storage":
             timezone = getattr(self.service, "timezone", None)
             guidance = self.foodkeeper.inventory_guidance(inventory, self.service._today(), timezone)
-            passages = self.foodkeeper.passages(question, guidance) + passages
+            passages = (self._package_date_passages(question, inventory)
+                        + self.foodkeeper.passages(question, guidance) + passages)
         if not passages:
-            return Answer("NO_SOURCES", "尚無相關文件，請加入食譜或食品保存文件。")
+            return Answer(
+                "NO_SOURCES",
+                "目前庫存與 FoodKeeper 都沒有匹配資料；請先放入物品、確認食品名稱，或加入保存文件。",
+            )
         if self.llm is None:
             return Answer("LLM_NOT_CONFIGURED", "已找到參考資料，本地 LLM 尚未設定。", passages)
         prompt = (

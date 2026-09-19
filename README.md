@@ -62,9 +62,19 @@ The API binds to `127.0.0.1:8000` by default. The frontend reads
 camera for the process lifetime, serializes station requests, and keeps login
 tokens only in memory. See [`docs/API_SPEC.md`](docs/API_SPEC.md) for the
 implemented routes and environment variables. “Ask the Fridge” retrieves real
-inventory-aware FoodKeeper passages; until an LLM is configured it returns
-`LLM_NOT_CONFIGURED` with those sources instead of a mock generated answer.
-History remains visibly marked not connected.
+inventory-aware FoodKeeper passages and can send them to Lemonade on the same
+PN54. Configure and start the API on Ubuntu with:
+
+```bash
+export FRIDGE_LEMONADE_MODEL="Gemma-3-4b-it-GGUF"
+export FRIDGE_LEMONADE_BASE_URL="http://127.0.0.1:13305/v1"
+export FRIDGE_LEMONADE_TIMEOUT="60"
+uv run fridge-guardian-api
+```
+
+If the model variable is omitted, the API returns `LLM_NOT_CONFIGURED` with
+the retrieved sources instead of a mock answer. History remains visibly marked
+not connected.
 
 ## Controls and 2–3 minute demo
 

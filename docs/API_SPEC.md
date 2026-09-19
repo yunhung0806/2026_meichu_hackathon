@@ -177,14 +177,17 @@ Header: `Authorization: Bearer <access_token>`.
 and may also be `recipes`. Retrieval authenticates first, reads only the
 current user's present inventory, and returns FoodKeeper and matching local
 Markdown passages. Package expiry dates take priority over general FoodKeeper
-guidance.
+guidance and are included as inventory passages. A question that directly names
+a known FoodKeeper food can retrieve its generic guidance even when that food
+is not currently in inventory. Broad inventory questions still require
+matching inventory data.
 
 ```json
 {
   "success": true,
   "data": {
-    "status": "LLM_NOT_CONFIGURED",
-    "answer": "已找到參考資料，本地 LLM 尚未設定。",
+    "status": "OK",
+    "answer": "蘋果仍在一般冷藏建議區間內。",
     "sources": [
       {
         "source": "foodkeeper/蘋果",
@@ -195,8 +198,10 @@ guidance.
 }
 ```
 
-The RAG transport and sources are real. Until Lemonade is integrated, the API
-does not generate a prose answer and reports `LLM_NOT_CONFIGURED` explicitly.
+The RAG transport and sources are real. When `FRIDGE_LEMONADE_MODEL` is set,
+the backend sends those passages to the loopback Lemonade chat-completions API.
+Without that setting it reports `LLM_NOT_CONFIGURED`; an unavailable or invalid
+Lemonade response reports `LLM_UNAVAILABLE` while preserving the sources.
 
 ## Local configuration
 
@@ -211,6 +216,9 @@ does not generate a prose answer and reports `LLM_NOT_CONFIGURED` explicitly.
 | `FRIDGE_YUNET_PATH` | bundled model path under `models/` |
 | `FRIDGE_SFACE_PATH` | bundled model path under `models/` |
 | `FRIDGE_ITEM_THRESHOLD` | `0.70` |
+| `FRIDGE_LEMONADE_MODEL` | unset (retrieval only) |
+| `FRIDGE_LEMONADE_BASE_URL` | `http://127.0.0.1:13305/v1` |
+| `FRIDGE_LEMONADE_TIMEOUT` | `60` seconds |
 
 The frontend reads `NEXT_PUBLIC_FRIDGE_API_BASE_URL`, defaulting to
 `http://127.0.0.1:8000`.
@@ -218,6 +226,6 @@ The frontend reads `NEXT_PUBLIC_FRIDGE_API_BASE_URL`, defaulting to
 ## Explicitly not implemented
 
 There are no HTTP routes here for history, PIN confirmation, image upload,
-Cloudflare D1, reminders, notification delivery, or LLM generation. The
-frontend labels history as not connected and labels RAG results separately
-from the not-yet-connected LLM.
+Cloudflare D1, reminders, or notification delivery. The frontend labels
+history as not connected. LLM generation is opt-in and requires an already
+installed/running Lemonade model on the same machine.

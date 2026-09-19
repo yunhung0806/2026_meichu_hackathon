@@ -26,6 +26,15 @@ class FakeCameraCapture:
         return [FrameSample(session_id, utc_now(), object()) for _ in range(3)]
 
 
+class FakeLLM:
+    def __init__(self):
+        self.prompt = ""
+
+    def generate(self, prompt):
+        self.prompt = prompt
+        return "建議先處理菠菜，蘋果較耐放。"
+
+
 class StationApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -185,6 +194,34 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["sources"])
         self.assertEqual(data["sources"][0]["source"], "foodkeeper/蘋果")
         self.assertIn("一般冷藏保存指引", data["sources"][0]["text"])
+
+    async def test_specific_food_question_has_source_without_inventory(self):
+        token = await self.identify(self.owner)
+        response = await self.client.post(
+            "/api/v1/questions",
+            headers=self.auth(token),
+            json={"question": "蘋果可以冷藏多久？"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertEqual(data["status"], "LLM_NOT_CONFIGURED")
+        self.assertEqual(data["sources"][0]["source"], "foodkeeper/蘋果")
+
+    async def test_question_returns_generated_answer_when_llm_is_configured(self):
+        token = await self.identify(self.owner)
+        await self.put(token, label="菠菜")
+        llm = FakeLLM()
+        self.app.state.station.questions.llm = llm
+        response = await self.client.post(
+            "/api/v1/questions",
+            headers=self.auth(token),
+            json={"question": "哪些食物要先處理？"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertEqual(data["status"], "OK")
+        self.assertEqual(data["answer"], "建議先處理菠菜，蘋果較耐放。")
+        self.assertIn("foodkeeper/菠菜", llm.prompt)
 
     async def test_question_requires_valid_login_and_question(self):
         missing = await self.client.post(
