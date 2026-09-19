@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { stationApi } from "@/lib/api";
 import type { IdentifiedUser, InventoryItem, OperationResult, QuestionAnswer } from "@/lib/api";
+import RecipeView from "./recipe-view";
 
-type Tab = "home" | "items" | "history" | "ask";
+type Tab = "home" | "items" | "recipes" | "history" | "ask";
 type Flow = "idle" | "recognizing" | "menu" | "put" | "take" | "result" | "error";
 
 export default function Home() {
@@ -90,6 +91,7 @@ export default function Home() {
       <nav aria-label="主要導覽">
         <NavButton active={tab === "home"} label="首頁" icon="⌂" onClick={() => void selectTab("home")} />
         <NavButton active={tab === "items"} label="冰箱物品" icon="▦" count={String(inventory.length)} onClick={() => void selectTab("items")} />
+        <NavButton active={tab === "recipes"} label="食譜推薦" icon="♨" onClick={() => void selectTab("recipes")} />
         <NavButton active={tab === "history"} label="使用紀錄" icon="↻" onClick={() => void selectTab("history")} />
         <NavButton active={tab === "ask"} label="問冰箱" icon="✦" onClick={() => void selectTab("ask")} />
       </nav>
@@ -99,6 +101,7 @@ export default function Home() {
       <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab, user)}</h1></div><div className="top-actions"><span className="status-dot">● {online ? "PN54 API 已連線" : "PN54 API 未連線"}</span></div></header>
       {tab === "home" && <HomeView inventory={inventory} online={online} onStart={beginRecognition} onTab={selectTab} />}
       {tab === "items" && <ItemsView items={inventory} identified={Boolean(user)} />}
+      {tab === "recipes" && (user ? <RecipeView key={`${user.user_id}:${user.access_token}`} /> : <UnavailableView title="請先辨識使用者" detail="回首頁辨識後，就能依你的庫存與保存期限推薦料理。" />)}
       {tab === "history" && <UnavailableView title="使用紀錄尚未連線" detail="本次整合只連接辨識、PUT_IN／TAKE_OUT 與目前庫存；此頁不顯示模擬紀錄。" />}
       {tab === "ask" && <AskView identified={Boolean(user)} />}
     </section>
@@ -114,7 +117,7 @@ export default function Home() {
 }
 
 function NavButton({ active, label, icon, count, onClick }: { active: boolean; label: string; icon: string; count?: string; onClick: () => void }) { return <button className={active ? "nav-item active" : "nav-item"} onClick={onClick}><span>{icon}</span>{label}{count && <b>{count}</b>}</button>; }
-function tabTitle(tab: Tab, user: IdentifiedUser | null) { return { home: user ? `你好，${user.display_name}` : "Fridge Guardian", items: "冰箱裡有什麼？", history: "使用紀錄", ask: "問問你的冰箱" }[tab]; }
+function tabTitle(tab: Tab, user: IdentifiedUser | null) { return { home: user ? `你好，${user.display_name}` : "Fridge Guardian", items: "冰箱裡有什麼？", recipes: "食譜推薦", history: "使用紀錄", ask: "問問你的冰箱" }[tab]; }
 
 function HomeView({ inventory, online, onStart, onTab }: { inventory: InventoryItem[]; online: boolean; onStart: () => void; onTab: (tab: Tab) => Promise<void> }) {
   const expiring = inventory.filter(item => item.expires_on).length;

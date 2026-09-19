@@ -26,6 +26,7 @@ from fridge_guardian.adapters.knowledge import FoodQuestions, LemonadeLLM, Local
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
 from fridge_guardian.application.fridge_service import FridgeService, PutOptions
+from fridge_guardian.application.recipes import RecipeQuestions
 from fridge_guardian.domain import Action, DecisionCode, FrameSample, utc_now
 
 
@@ -57,6 +58,10 @@ class OperateRequest(BaseModel):
 class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     category: Literal["recipes", "storage"] = "storage"
+
+
+class RecipeRequest(BaseModel):
+    question: str = Field(default="現在可以煮什麼？", min_length=1, max_length=2000)
 
 
 class CameraSessionCapture:
@@ -94,11 +99,15 @@ class StationRuntime:
         capture_frames: Callable[[], Sequence[FrameSample]],
         *,
         questions: FoodQuestions | None = None,
+        recipes: RecipeQuestions | None = None,
         close: Callable[[], None] | None = None,
     ) -> None:
         self.service = service
         self.capture_frames = capture_frames
         self.questions = questions
+        self.recipes = recipes or RecipeQuestions(
+            service, PROJECT_ROOT / "data" / "knowledge" / "recipes"
+        )
         self.close_callback = close
         self.lock = asyncio.Lock()
 
@@ -156,6 +165,13 @@ def build_runtime() -> StationRuntime:
             LocalKnowledge(PROJECT_ROOT / "data" / "knowledge"),
             llm=_lemonade_from_environment(),
         )
+        recipes = RecipeQuestions(
+            service,
+            _env_path(
+                "FRIDGE_RECIPE_DIR", PROJECT_ROOT / "data" / "knowledge" / "recipes"
+            ),
+            llm=questions.llm,
+        )
         camera = OpenCVCamera(int(os.environ.get("FRIDGE_CAMERA_INDEX", "0")))
 
         def close() -> None:
@@ -164,7 +180,8 @@ def build_runtime() -> StationRuntime:
             repository.close()
 
         return StationRuntime(
-            service, CameraSessionCapture(camera, settings), questions=questions, close=close
+            service, CameraSessionCapture(camera, settings), questions=questions,
+            recipes=recipes, close=close
         )
     except Exception:
         if camera is not None:
@@ -371,6 +388,23 @@ def create_app(
                     ],
                 }
             )
+
+    @api.post("/api/v1/recipes/recommend")
+    async def recommend_recipes(
+        payload: RecipeRequest,
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        station: StationRuntime = request.app.state.station
+        token = _token(authorization)
+        async with station.lock:
+            try:
+                result = station.recipes.recommend(token, payload.question.strip())
+            except PermissionError as exc:
+                raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+            except ValueError as exc:
+                raise ApiError(422, "VALIDATION_ERROR", str(exc)) from exc
+            return _success(result)
 
     return api
 

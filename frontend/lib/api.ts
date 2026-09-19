@@ -34,6 +34,35 @@ export type QuestionAnswer = {
   sources: { source: string; text: string }[];
 };
 
+export type RecipeIngredient = InventoryItem & {
+  days_left: number | null;
+  priority: boolean;
+  date_basis: "PACKAGE" | "FOODKEEPER" | "UNKNOWN";
+  reference_date: string | null;
+  status: string;
+};
+
+export type RecipeRecommendations = {
+  today: string;
+  soon_days: number;
+  ingredients: RecipeIngredient[];
+  excluded: RecipeIngredient[];
+  status: "OK" | "RETRIEVAL_ONLY" | "LLM_UNAVAILABLE" | "NO_MATCH" | "EMPTY_INVENTORY";
+  answer: string;
+  recipes: {
+    id: string;
+    title: string;
+    matched: string[];
+    missing: string[];
+    use_first: string[];
+    pantry: string[];
+    steps: string[];
+    source: string;
+    source_title: string;
+    provenance: string;
+  }[];
+};
+
 type Envelope<T> = { success: true; data: T };
 type ErrorEnvelope = { success: false; error: { code: string; message: string } };
 
@@ -95,6 +124,13 @@ export const stationApi = {
     return request<QuestionAnswer>("/api/v1/questions", {
       method: "POST",
       body: JSON.stringify({ question, category }),
+    });
+  },
+
+  recipes(question: string) {
+    return request<RecipeRecommendations>("/api/v1/recipes/recommend", {
+      method: "POST",
+      body: JSON.stringify({ question }),
     });
   },
 

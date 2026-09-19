@@ -97,6 +97,27 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(token)
         self.assertEqual(self.capture.calls, 1)
 
+    async def test_recipe_recommendations_use_authenticated_inventory(self):
+        token = await self.identify(self.owner)
+        await self.put(token, label="菠菜")
+        response = await self.client.post(
+            "/api/v1/recipes/recommend",
+            headers=self.auth(token),
+            json={"question": "請推薦可以先處理菠菜的料理"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertTrue(data["recipes"])
+        self.assertIn("菠菜", data["recipes"][0]["matched"])
+        self.assertEqual(data["status"], "RETRIEVAL_ONLY")
+
+        denied = await self.client.post(
+            "/api/v1/recipes/recommend",
+            headers=self.auth("invalid"),
+            json={"question": "推薦料理"},
+        )
+        self.assertEqual(denied.status_code, 401)
+
     async def test_put_in_inventory_and_owner_take_out(self):
         token = await self.identify(self.owner)
         stored = await self.put(token, label="confirmed milk")
