@@ -1,0 +1,24 @@
+{
+  "localization_labels": [
+    "bottle", "can", "carton", "apple", "banana", "orange", "grape",
+    "strawberry", "fruit", "vegetable", "egg", "dessert",
+    "food container", "food"
+  ],
+  "localization": {
+    "box_threshold": 0.25,
+    "text_threshold": 0.20,
+    "minimum_area_fraction": 0.025,
+    "maximum_area_fraction": 0.92,
+    "centrality_weight": 0.08,
+    "padding_fraction": 0.06
+  },
+  "category": {
+    "minimum_top1_probability": 0.25,
+    "minimum_margin": 0.03
+  },
+  "instance": {
+    "minimum_similarity": 0.72,
+    "minimum_margin": 0.04,
+    "maximum_gallery_entries": 100
+  }
+}

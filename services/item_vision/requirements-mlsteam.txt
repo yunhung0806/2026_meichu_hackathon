@@ -1,0 +1,7 @@
+# Install beside the platform-managed PyTorch/ROCm runtime. Never install torch here.
+huggingface-hub>=0.34,<1
+numpy>=1.26,<2.3
+Pillow>=10.4,<13
+safetensors>=0.4.5,<1
+tqdm>=4.66,<5
+transformers==4.57.6

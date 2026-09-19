@@ -43,8 +43,10 @@ Use `--debug-face` only while calibrating to show detailed scores.
 ### Browser + local station API
 
 The browser integration reuses the same repository, models, coordinator, and
-`FridgeService`. Start the API from the repository root, then start the frontend
-in a second terminal:
+`FridgeService`. Item operations require the loopback
+[`item-vision-v1` sidecar](services/item_vision/README.md) on port 8765 (local
+or through an SSH tunnel); there is no silent HSV fallback. Start the API from
+the repository root, then start the frontend in a second terminal:
 
 ```powershell
 $env:UV_CACHE_DIR="$PWD\.uv-cache"
@@ -127,12 +129,14 @@ OpenCV camera (one short capture, one session_id)
                    |
      CLI or loopback FastAPI station bridge
                    |
-          SessionCoordinator + FridgeService
-          /                \
-YuNet + SFace           ROI spatial HSV
-IdentityProvider       ItemRecognizer
-          \                /
-        ownership policy + SQLite
+        YuNet + SFace identity revalidation
+                   |
+ green item ROI -> loopback item-vision-v1 sidecar
+ Grounding DINO -> CLIP v2 suggestions -> DINOv2 ranking
+                   |
+ short-lived inspection -> human review -> confirmed commit
+                   |
+           ownership policy + SQLite
                    |
       OpenCV result overlay + local beep
 ```
@@ -141,10 +145,11 @@ IdentityProvider       ItemRecognizer
   typed recognition results.
 - `contracts`: replaceable `ActionSource`, `IdentityProvider`,
   `ItemRecognizer`, `Repository`, and `Feedback` protocols.
-- `application`: same-session coordination, enrollment, `PUT_IN`, `TAKE_OUT`,
-  and ownership policy. Model adapters never call each other.
-- `adapters`: OpenCV camera/UI, YuNet + SFace, baseline item matching, SQLite,
-  keyboard input, and Windows beep.
+- `application`: same-session coordination, enrollment, short-lived item
+  inspection, confirmed `PUT_IN`/`TAKE_OUT`, and ownership policy. Scanning
+  never mutates inventory.
+- `adapters`: OpenCV camera/UI, YuNet + SFace, the strict loopback Item Vision
+  client, SQLite, keyboard input, and Windows beep.
 
 `ManualActionSource` is the only action source in this MVP. A future
 `VisionActionSource` can implement the same contract without changing the
@@ -221,6 +226,9 @@ public/commercial deployment.
 Runtime dependencies are NumPy, the maintained `opencv-python` package,
 FastAPI, Uvicorn, and `tzdata` for portable `Asia/Taipei` date handling. This
 MVP does not modify ROCm, PyTorch, drivers, kernels, or another system AI runtime.
+The sidecar keeps model binaries out of Git, verifies pinned checksums, and
+supports explicit `auto`, `cuda:<index>`, or CPU compatibility selection. PN54
+performance is not claimed until measured there.
 
 ## Tests
 
@@ -244,16 +252,18 @@ recognition quality.
 | Real camera preview | Manually verified on the current Windows host | Live preview, handheld-item ROI, capture countdown, and `FACE READY` guidance were observed; camera model was not recorded. |
 | Original YuNet + SFace baseline | Previously manually verified with two consenting users | The old single-decision flow had intermittent missed detections and one operational identity mismatch. |
 | Enhanced multi-template / multi-frame face flow | Automated logic and ONNX-load tests only | Camera indices 0 and 1 were unavailable to the work environment, so A/B/unknown/no-face acceptance must be rerun locally after enrollment into a fresh test database. This is not an authentication system. |
-| Item recognition | One real item manually verified with `--item-threshold 0.60` | `PUT_IN`, owner `TAKE_OUT`, and non-owner `TAKE_OUT` completed. Accuracy is intentionally provisional; three distinct items and three consecutive runs remain unverified. |
+| Browser Item Vision integration | Mocked Windows integration tests plus preserved MI300X static evidence | Inspect/review/confirmed-commit logic is verified locally. The integrated browser flow and PN54 CPU runtime still require hardware smoke tests. |
+| Legacy CLI HSV baseline | Previously verified with one real item using `--item-threshold 0.60` | Retained only for the keyboard CLI; it is not an automatic browser fallback. |
 | Warning audio | Manually verified | The user observed `WARN_NOT_OWNER` and the local warning sound on the current Windows host. |
 | PN54 / MI300 | Not connected by explicit scope | No PN54, Manta, training, or fine-tuning claim in this iteration. |
 
 ## Known limitations and troubleshooting
 
-- Item matching is a simple spatial HSV histogram, not a learned instance
-  embedding. Similar-looking packages, background changes, glare, rotation,
-  occlusion, and an item not filling the ROI may become `UNKNOWN` or match
-  incorrectly. Use visually distinct items for this validation round.
+- Browser item matching uses DINOv2 embeddings from the Item Vision sidecar;
+  similar packaging, glare, rotation, occlusion, and poor ROI placement can
+  still produce ambiguous or no-match results. The review screen must resolve
+  them before any database mutation. The separate keyboard CLI still uses its
+  legacy spatial HSV baseline.
 - Face thresholds are centralized in `config/face.json`; item matching retains
   its existing `0.70` default. Neither is a measured production value.
 - The first hardware walkthrough used `--item-threshold 0.60` to exercise the

@@ -1,6 +1,6 @@
 # Fridge Guardian Station API
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 
 **Status:** Implemented local station bridge
 
@@ -41,7 +41,8 @@ All success responses use `{"success": true, "data": ...}`. Errors use:
 | GET | `/api/v1/health` | No | No | Check that the local API initialized |
 | POST | `/api/v1/station/identify` | No | Yes | Capture locally, identify one enrolled user, and issue a token |
 | POST | `/api/v1/station/enroll` | No | Yes | Capture several face poses, create a local user, and issue a token |
-| POST | `/api/v1/station/operate` | Yes | Yes | Recheck the same user, recognize one item, and process `PUT_IN` or `TAKE_OUT` |
+| POST | `/api/v1/station/inspect` | Yes | Yes | Recheck the same user and inspect one item without changing inventory |
+| POST | `/api/v1/station/operate` | Yes | No | Explicitly confirm one unexpired inspection and atomically change inventory |
 | GET | `/api/v1/inventory` | Yes | No | Return the current identified user's present SQLite inventory |
 | POST | `/api/v1/questions` | Yes | No | Retrieve inventory-aware FoodKeeper/Markdown passages |
 | POST | `/api/v1/recipes/recommend` | Yes | No | Rank local recipes using the user's inventory and near-expiry items |
@@ -108,7 +109,31 @@ stores only numeric face templates in SQLite and returns the same memory-only
 login shape as identification. Insufficient clear face samples return
 `422 ENROLLMENT_FAILED`; raw camera frames are never returned or persisted.
 
-## `POST /api/v1/station/operate`
+## Two-stage item operation
+
+Scanning and database mutation are deliberately separate. `inspect` captures
+one in-memory camera session, revalidates the signed-in face, sends only the
+green item ROI JPEG plus opaque DINOv2 gallery templates to the loopback Item
+Vision service, then retains embeddings and the candidate allowlist in memory
+for 120 seconds. It does not save an image or modify inventory.
+
+### `POST /api/v1/station/inspect`
+
+Header: `Authorization: Bearer <access_token>`.
+
+```json
+{"action": "PUT_IN"}
+```
+
+The response includes an opaque `inspection_id`, expiry, matched identity,
+localization status, category Top-3 suggestions, instance status, eligible
+candidate display rows, a suggested editable label, and an authorization-filtered
+inventory snapshot for every `TAKE_OUT` review. Raw embeddings never reach the browser.
+`UNKNOWN_CATEGORY` is non-blocking. Localization failure returns a
+non-committable inspection that requires rescan. Sidecar failure returns
+`503 ITEM_VISION_UNAVAILABLE` and never falls back to HSV.
+
+### `POST /api/v1/station/operate`
 
 Header: `Authorization: Bearer <access_token>`.
 
@@ -116,26 +141,50 @@ Header: `Authorization: Bearer <access_token>`.
 
 ```json
 {
+  "inspection_id": "opaque-short-lived-id",
   "action": "PUT_IN",
-  "label": "milk",
+  "confirmed": true,
+  "label": "reviewed milk",
+  "selected_item_id": null,
+  "add_as_new": true,
   "shared": false,
   "expires_on": "2026-09-22"
 }
 ```
 
-`label` is required, trimmed, and limited to 200 characters. It is confirmed or
-entered by the user; the spatial HSV instance matcher does not generate food
-names. `expires_on` may be `null`. `shared` defaults to `false`.
+`label` is user-reviewed, required for put-in, trimmed, and limited to 200
+characters. Category suggestions and edited labels never choose `item_id`.
+For `MATCHED`, `AMBIGUOUS`, and `NO_MATCH`, the user may choose an eligible
+offered item or explicitly set `add_as_new`; the browser defaults `MATCHED` to
+the best eligible candidate and `NO_MATCH` to a new item. If no eligible
+candidate remains after filtering, the browser defaults to a new item. When
+`add_as_new` is true, `selected_item_id` must be null and the backend creates
+the opaque ID. DINOv2 crop and ROI templates are saved under that final item
+ID. `expires_on` may be `null`; `shared` defaults to `false`.
 
 ### TAKE_OUT request
 
 ```json
-{"action": "TAKE_OUT"}
+{
+  "inspection_id": "opaque-short-lived-id",
+  "action": "TAKE_OUT",
+  "confirmed": true,
+  "selected_item_id": "offered-opaque-item-id"
+}
 ```
 
-One request captures a fresh session, rechecks the user, recognizes the item,
-applies ownership policy, records the event, and updates SQLite only when the
-decision allows take-out.
+`MATCHED` may preselect the best authorized AI candidate, but every status may
+be corrected using only the authorized inventory snapshot returned by that
+inspection. `AMBIGUOUS` and `NO_MATCH` require an explicit choice. Typed labels
+never identify a take-out item. If the snapshot is empty, inspection returns a
+non-committable `NO_AUTHORIZED_ITEMS` review state and no inventory mutation is
+possible.
+
+The commit rejects missing confirmation, unknown/expired/used inspections,
+action or identity mismatch, arbitrary IDs, stale inventory, and unauthorized
+choices. The selected row is rechecked for presence and authorization at commit
+time. A successful inspection is consumed once. Failed validation does not
+pretend that inventory changed.
 
 ### Operation response
 
@@ -246,7 +295,8 @@ Lemonade response reports `LLM_UNAVAILABLE` while preserving the sources.
 | `FRIDGE_FACE_CONFIG` | `config/face.json` |
 | `FRIDGE_YUNET_PATH` | bundled model path under `models/` |
 | `FRIDGE_SFACE_PATH` | bundled model path under `models/` |
-| `FRIDGE_ITEM_THRESHOLD` | `0.70` |
+| `FRIDGE_ITEM_VISION_URL` | `http://127.0.0.1:8765` (loopback only) |
+| `FRIDGE_ITEM_VISION_TIMEOUT` | `60` seconds |
 | `FRIDGE_LEMONADE_MODEL` | unset (retrieval only) |
 | `FRIDGE_LEMONADE_BASE_URL` | `http://127.0.0.1:13305/v1` |
 | `FRIDGE_LEMONADE_TIMEOUT` | `60` seconds |

@@ -1,0 +1,24 @@
+{
+  "model_version": "clip-v2",
+  "artifact_name": "clip_vit_b32_item_classifier.clip-v2-mi300x.torchscript.pt",
+  "artifact_sha256": "76e007cfa80ce548500bdb5803c2bcfe5580ede2d2b79ece415ebe4d5ea3b58f",
+  "source_cpu_torchscript_sha256": "ba7bc6c11cd8f1a7d30e8441d0b4400d3f7f1cefad5ddef46325d701cf3fd639",
+  "trace_device": "cuda",
+  "labels": [
+    "beverage", "apple", "banana", "orange", "grape", "strawberry",
+    "other_fruit", "vegetable", "egg", "dessert", "other_food"
+  ],
+  "preprocessing": {
+    "color_mode": "RGB",
+    "resize_short_edge": 224,
+    "interpolation": "bicubic",
+    "center_crop": 224,
+    "tensor_scale": "uint8 / 255.0",
+    "normalize": {
+      "mean": [0.48145466, 0.4578275, 0.40821073],
+      "std": [0.26862954, 0.26130258, 0.27577711]
+    }
+  },
+  "classification_role": "Semantic Top-3 suggestion only; never selects item_id or blocks PUT_IN",
+  "reload_verified_on": "AMD Instinct MI300X"
+}
