@@ -97,6 +97,27 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(token)
         self.assertEqual(self.capture.calls, 1)
 
+    async def test_browser_enrollment_creates_user_and_login(self):
+        response = await self.client.post(
+            "/api/v1/station/enroll", json={"display_name": "  New User  "}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertEqual(data["display_name"], "New User")
+        enrolled = [user for user in self.repo.list_users() if user.user_id == data["user_id"]]
+        self.assertEqual(len(enrolled), 1)
+        self.assertEqual(len(self.repo.list_face_templates()), 3)
+        inventory = await self.client.get(
+            "/api/v1/inventory", headers=self.auth(data["access_token"])
+        )
+        self.assertEqual(inventory.status_code, 200)
+        self.assertEqual(inventory.json()["data"]["items"], [])
+
+        blank = await self.client.post(
+            "/api/v1/station/enroll", json={"display_name": "   "}
+        )
+        self.assertEqual(blank.status_code, 422)
+
     async def test_recipe_recommendations_use_authenticated_inventory(self):
         token = await self.identify(self.owner)
         await self.put(token, label="菠菜")

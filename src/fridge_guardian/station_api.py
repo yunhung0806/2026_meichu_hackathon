@@ -25,6 +25,7 @@ from fridge_guardian.adapters.item import SpatialHistogramItemRecognizer
 from fridge_guardian.adapters.knowledge import FoodQuestions, LemonadeLLM, LocalKnowledge
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
+from fridge_guardian.application.coordinator import EnrollmentError
 from fridge_guardian.application.fridge_service import FridgeService, PutOptions
 from fridge_guardian.application.recipes import RecipeQuestions
 from fridge_guardian.domain import Action, DecisionCode, FrameSample, utc_now
@@ -64,6 +65,10 @@ class RecipeRequest(BaseModel):
     question: str = Field(default="現在可以煮什麼？", min_length=1, max_length=2000)
 
 
+class EnrollRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+
+
 class CameraSessionCapture:
     """Capture short in-memory sessions from the one backend-owned camera."""
 
@@ -72,11 +77,21 @@ class CameraSessionCapture:
         self.settings = settings
 
     def __call__(self) -> list[FrameSample]:
+        return self._capture(
+            self.settings.recognition_candidate_frames,
+            self.settings.recognition_window_seconds,
+        )
+
+    def enrollment(self) -> list[FrameSample]:
+        return self._capture(
+            self.settings.enrollment_candidate_frames,
+            self.settings.enrollment_window_seconds,
+        )
+
+    def _capture(self, count: int, duration: float) -> list[FrameSample]:
         if self.settings.prepare_seconds > 0:
             time.sleep(self.settings.prepare_seconds)
         session_id = str(uuid4())
-        count = self.settings.recognition_candidate_frames
-        duration = self.settings.recognition_window_seconds
         interval = duration / max(count, 1)
         frames: list[FrameSample] = []
         started = time.monotonic()
@@ -98,12 +113,14 @@ class StationRuntime:
         service: FridgeService,
         capture_frames: Callable[[], Sequence[FrameSample]],
         *,
+        capture_enrollment: Callable[[], Sequence[FrameSample]] | None = None,
         questions: FoodQuestions | None = None,
         recipes: RecipeQuestions | None = None,
         close: Callable[[], None] | None = None,
     ) -> None:
         self.service = service
         self.capture_frames = capture_frames
+        self.capture_enrollment = capture_enrollment or capture_frames
         self.questions = questions
         self.recipes = recipes or RecipeQuestions(
             service, PROJECT_ROOT / "data" / "knowledge" / "recipes"
@@ -179,8 +196,9 @@ def build_runtime() -> StationRuntime:
             camera.close()
             repository.close()
 
+        capture = CameraSessionCapture(camera, settings)
         return StationRuntime(
-            service, CameraSessionCapture(camera, settings), questions=questions,
+            service, capture, capture_enrollment=capture.enrollment, questions=questions,
             recipes=recipes, close=close
         )
     except Exception:
@@ -306,6 +324,27 @@ def create_app(
                 login = station.service.identify(station.capture_frames())
             except PermissionError as exc:
                 raise ApiError(401, "UNKNOWN_USER", str(exc)) from exc
+            return _success(
+                {
+                    "access_token": login.token,
+                    "token_type": "bearer",
+                    "user_id": login.user_id,
+                    "display_name": login.display_name,
+                    "expires_at": login.expires_at.isoformat(),
+                }
+            )
+
+    @api.post("/api/v1/station/enroll")
+    async def enroll(payload: EnrollRequest, request: Request):
+        station: StationRuntime = request.app.state.station
+        name = payload.display_name.strip()
+        if not name:
+            raise ApiError(422, "VALIDATION_ERROR", "Display name cannot be empty.")
+        async with station.lock:
+            try:
+                login = station.service.enroll(name, station.capture_enrollment())
+            except EnrollmentError as exc:
+                raise ApiError(422, "ENROLLMENT_FAILED", str(exc)) from exc
             return _success(
                 {
                     "access_token": login.token,

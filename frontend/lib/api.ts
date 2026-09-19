@@ -104,6 +104,15 @@ export const stationApi = {
     return user;
   },
 
+  async enroll(displayName: string) {
+    const user = await request<IdentifiedUser>("/api/v1/station/enroll", {
+      method: "POST",
+      body: JSON.stringify({ display_name: displayName }),
+    });
+    accessToken = user.access_token;
+    return user;
+  },
+
   operate(payload: {
     action: "PUT_IN" | "TAKE_OUT";
     label?: string;

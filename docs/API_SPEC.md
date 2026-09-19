@@ -40,6 +40,7 @@ All success responses use `{"success": true, "data": ...}`. Errors use:
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/health` | No | No | Check that the local API initialized |
 | POST | `/api/v1/station/identify` | No | Yes | Capture locally, identify one enrolled user, and issue a token |
+| POST | `/api/v1/station/enroll` | No | Yes | Capture several face poses, create a local user, and issue a token |
 | POST | `/api/v1/station/operate` | Yes | Yes | Recheck the same user, recognize one item, and process `PUT_IN` or `TAKE_OUT` |
 | GET | `/api/v1/inventory` | Yes | No | Return the current identified user's present SQLite inventory |
 | POST | `/api/v1/questions` | Yes | No | Retrieve inventory-aware FoodKeeper/Markdown passages |
@@ -93,6 +94,19 @@ Body: none. The backend captures a fresh short session and calls
 
 Unknown or invalid identity returns `401 UNKNOWN_USER`. Face templates and
 embeddings are never returned.
+
+## `POST /api/v1/station/enroll`
+
+```json
+{"display_name": "Alice"}
+```
+
+The station waits for the configured preparation delay, captures the longer
+enrollment sequence, and reuses `SessionCoordinator.enroll_user`. The user
+should look forward and then turn slightly left and right. A successful request
+stores only numeric face templates in SQLite and returns the same memory-only
+login shape as identification. Insufficient clear face samples return
+`422 ENROLLMENT_FAILED`; raw camera frames are never returned or persisted.
 
 ## `POST /api/v1/station/operate`
 
