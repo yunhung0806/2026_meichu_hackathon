@@ -154,13 +154,20 @@ class FridgeService:
                 with self.repo.connection:
                     self.repo.connection.execute("UPDATE inventory SET present=0 WHERE item_id=?", (item.item_id,))
         decision = Decision(
-            session_id=sid, action=action, code=code,
+            session_id=sid,
+            action=action,
+            code=code,
             message=message + ("; " + "; ".join(warnings) if warnings else ""),
-            user_id=login.user_id, item_id=item.item_id if item else None,
-            identity_confidence=identity.confidence, identity_status=identity.status,
-            identity_second_score=identity.second_score, identity_margin=identity.margin,
-            identity_valid_frames=identity.valid_frames, identity_vote_ratio=identity.vote_ratio,
-            item_confidence=match.confidence, warnings=tuple(warnings),
+            user_id=login.user_id,
+            item_id=item.item_id if item else None,
+            identity_confidence=identity.confidence,
+            identity_status=identity.status,
+            identity_second_score=identity.second_score,
+            identity_margin=identity.margin,
+            identity_valid_frames=identity.valid_frames,
+            identity_vote_ratio=identity.vote_ratio,
+            item_confidence=match.confidence,
+            warnings=tuple(warnings),
         )
         self.coordinator._finish(decision)
         return OperationResult(decision, tuple(warnings))
