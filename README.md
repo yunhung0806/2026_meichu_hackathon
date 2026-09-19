@@ -65,6 +65,11 @@ implemented routes and environment variables. “Ask the Fridge” retrieves rea
 inventory-aware FoodKeeper passages and can send them to Lemonade on the same
 PN54. Configure and start the API on Ubuntu with:
 
+New users can now select **我是新人** beside the home-page recognition button,
+enter a display name, and complete the existing multi-pose enrollment through
+the browser. The Python API still owns the camera; successful enrollment stores
+numeric face templates locally and immediately starts a memory-only login.
+
 ```bash
 export FRIDGE_LEMONADE_MODEL="Gemma-3-4b-it-GGUF"
 export FRIDGE_LEMONADE_BASE_URL="http://127.0.0.1:13305/v1"

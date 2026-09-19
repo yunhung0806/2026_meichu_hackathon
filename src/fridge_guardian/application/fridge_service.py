@@ -70,6 +70,14 @@ class FridgeService:
         user = next((u for u in self.repo.list_users() if u.user_id == result.user_id), None)
         if result.session_id != sid or user is None:
             raise PermissionError("Unknown user; enroll or retry")
+        return self._issue_login(user)
+
+    def enroll(self, display_name, frames) -> Login:
+        """Enroll a new local face and immediately start its memory-only session."""
+        user = self.coordinator.enroll_user(display_name, frames)
+        return self._issue_login(user)
+
+    def _issue_login(self, user) -> Login:
         now = self.clock()
         self.logins = {k: v for k, v in self.logins.items() if v.expires_at > now}
         login = Login(token_urlsafe(32), user.user_id, user.display_name, now + timedelta(minutes=5))
