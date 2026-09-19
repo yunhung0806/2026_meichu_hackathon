@@ -76,6 +76,15 @@ If the model variable is omitted, the API returns `LLM_NOT_CONFIGURED` with
 the retrieved sources instead of a mock answer. History remains visibly marked
 not connected.
 
+The sidebar's **食譜推薦** page uses the signed-in user's inventory and ranks
+recipes that consume food within three days of its package date first. Items
+without a package date use FoodKeeper only as a general storage reference.
+Expired items are excluded. The bundled starter recipes are project-authored
+CC0 data under `data/knowledge/recipes`; set `FRIDGE_RECIPE_DIR` to load a
+different local recipe directory. When Lemonade is configured, the same local
+model turns the retrieved result into a grounded Traditional Chinese answer;
+the recipe cards remain available if the model is offline.
+
 ## Controls and 2–3 minute demo
 
 Keep exactly one clear face visible and mostly front-facing. Only the item goes

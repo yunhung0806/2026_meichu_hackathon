@@ -43,6 +43,23 @@ All success responses use `{"success": true, "data": ...}`. Errors use:
 | POST | `/api/v1/station/operate` | Yes | Yes | Recheck the same user, recognize one item, and process `PUT_IN` or `TAKE_OUT` |
 | GET | `/api/v1/inventory` | Yes | No | Return the current identified user's present SQLite inventory |
 | POST | `/api/v1/questions` | Yes | No | Retrieve inventory-aware FoodKeeper/Markdown passages |
+| POST | `/api/v1/recipes/recommend` | Yes | No | Rank local recipes using the user's inventory and near-expiry items |
+
+## `POST /api/v1/recipes/recommend`
+
+Header: `Authorization: Bearer <access_token>`.
+
+```json
+{"question": "請用快到期的食材推薦料理"}
+```
+
+The response contains `ingredients`, excluded unsafe/out-of-guidance items,
+up to five ranked `recipes`, and an optional Lemonade `answer`. Package expiry
+always takes precedence; FoodKeeper dates are labeled as general guidance and
+are never presented as package expiry. If Lemonade is unavailable, retrieval
+results are still returned with `RETRIEVAL_ONLY` or `LLM_UNAVAILABLE` status.
+Recipe JSON is loaded from `FRIDGE_RECIPE_DIR` when set, otherwise from
+`data/knowledge/recipes`.
 
 ## `GET /api/v1/health`
 
