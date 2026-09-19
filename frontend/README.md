@@ -4,15 +4,14 @@
 
 ## 目前介面
 
-- 人臉辨識後顯示使用者名稱
-- 選擇放入或取出物品
-- 放入時選擇個人／共用、記錄時間與選填期限
-- 無明定期限時顯示 RAG 保存期限提示
-- 取出時提示即將或已經超過期限的物品
-- 冰箱物品、個人物品與歷史紀錄查詢
-- RAG + Local LLM 問答介面
+- 透過 PN54 本機 station API 辨識使用者
+- 選擇放入或取出物品，並顯示真實 `ALLOW`、`WARNING` 或 `UNKNOWN`
+- 放入時由使用者確認名稱、個人／共用與選填期限
+- 從 SQLite inventory API 顯示目前辨識使用者的庫存
+- 清楚標示尚未連線的歷史與「問冰箱」頁面
 
-目前使用 mock data，尚未串接攝影機、FastAPI、RAG 或 Local LLM。
+核心流程不再使用 mock data 或計時器。攝影機只由 Python 後端控制；
+歷史、RAG 與 Local LLM 尚未串接，介面不會冒充真實結果。
 
 ## 開發
 
@@ -21,6 +20,21 @@
 ```bash
 cd frontend
 npm install
+npm run dev
+```
+
+API base URL 預設為 `http://127.0.0.1:8000`。如需調整，在本機未提交的
+`.env.local` 設定：
+
+```text
+NEXT_PUBLIC_FRIDGE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+啟動前端前，先從 repository root 啟動本機 API：
+
+```bash
+uv run fridge-guardian-api
+cd frontend
 npm run dev
 ```
 

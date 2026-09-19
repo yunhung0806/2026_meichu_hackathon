@@ -1,8 +1,9 @@
 # Identity-first backend
 
-`FridgeService` is a local Python integration API for the existing application.
-The camera CLI still uses the original coordinator; its UI must call this API
-for the extended workflow. No extra web server or runtime packages are added.
+`FridgeService` is the local Python integration layer for the existing application.
+The implemented FastAPI station bridge in `fridge_guardian.station_api` now lets
+the browser use its identity, operation, and inventory methods. The camera CLI
+remains available and still uses the original coordinator directly.
 
 ## Reuse and additions
 
@@ -19,6 +20,16 @@ for the extended workflow. No extra web server or runtime packages are added.
 | Fine-tuned semantic labels | Model/data unavailable; not implemented or claimed trained |
 
 ## UI integration
+
+The supported browser integration is documented in [API_SPEC.md](API_SPEC.md):
+`GET /health`, `POST /station/identify`, `POST /station/operate`, and
+`GET /inventory`, all under `/api/v1`. One Python process owns the camera and
+serializes station requests. Tokens stay in the existing in-memory
+`FridgeService` store. History, reminders, and food questions do not currently
+have HTTP routes, and the frontend labels those views as not connected.
+
+The Python example below remains useful for non-HTTP callers and for features
+that have not been exposed over HTTP.
 
 ```python
 from datetime import date

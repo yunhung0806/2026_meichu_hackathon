@@ -40,6 +40,30 @@ database defaults to `data/fridge_guardian.db` and is git-ignored.
 Face thresholds and capture durations are centralized in `config/face.json`.
 Use `--debug-face` only while calibrating to show detailed scores.
 
+### Browser + local station API
+
+The browser integration reuses the same repository, models, coordinator, and
+`FridgeService`. Start the API from the repository root, then start the frontend
+in a second terminal:
+
+```powershell
+$env:UV_CACHE_DIR="$PWD\.uv-cache"
+uv run fridge-guardian-api
+```
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+The API binds to `127.0.0.1:8000` by default. The frontend reads
+`NEXT_PUBLIC_FRIDGE_API_BASE_URL` and defaults to that address. Python owns the
+camera for the process lifetime, serializes station requests, and keeps login
+tokens only in memory. See [`docs/API_SPEC.md`](docs/API_SPEC.md) for the four
+implemented routes and environment variables. History and “Ask the Fridge” are
+visibly marked not connected; they do not show mock results.
+
 ## Controls and 2–3 minute demo
 
 Keep exactly one clear face visible and mostly front-facing. Only the item goes
@@ -75,7 +99,9 @@ local enrollments and event history.
 ```text
 OpenCV camera (one short capture, one session_id)
                    |
-          SessionCoordinator
+     CLI or loopback FastAPI station bridge
+                   |
+          SessionCoordinator + FridgeService
           /                \
 YuNet + SFace           ROI spatial HSV
 IdentityProvider       ItemRecognizer
@@ -166,9 +192,9 @@ Official sources and the licensing caveat are recorded in
 pretrained weight's training-data provenance needs a dedicated review before
 public/commercial deployment.
 
-Runtime dependencies are only NumPy and the maintained `opencv-python`
-package. This MVP does not modify ROCm, PyTorch, drivers, kernels, or another
-system AI runtime.
+Runtime dependencies are NumPy, the maintained `opencv-python` package,
+FastAPI, Uvicorn, and `tzdata` for portable `Asia/Taipei` date handling. This
+MVP does not modify ROCm, PyTorch, drivers, kernels, or another system AI runtime.
 
 ## Tests
 
