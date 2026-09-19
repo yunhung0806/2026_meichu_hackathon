@@ -61,6 +61,11 @@ class FoodKeeperGuideTests(unittest.TestCase):
         self.assertEqual(len(passages), 1)
         self.assertIn("apple", passages[0].text)
 
+    def test_specific_food_question_has_generic_source_without_inventory(self):
+        passages = self.guide.passages("蘋果可以冷藏多久？", ())
+        self.assertEqual(passages[0].source, "foodkeeper/蘋果")
+        self.assertIn("一般指引", passages[0].text)
+
 
 class LemonadeLLMTests(unittest.TestCase):
     def test_generates_with_openai_compatible_chat_endpoint(self):

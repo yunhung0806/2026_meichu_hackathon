@@ -177,7 +177,10 @@ Header: `Authorization: Bearer <access_token>`.
 and may also be `recipes`. Retrieval authenticates first, reads only the
 current user's present inventory, and returns FoodKeeper and matching local
 Markdown passages. Package expiry dates take priority over general FoodKeeper
-guidance.
+guidance and are included as inventory passages. A question that directly names
+a known FoodKeeper food can retrieve its generic guidance even when that food
+is not currently in inventory. Broad inventory questions still require
+matching inventory data.
 
 ```json
 {

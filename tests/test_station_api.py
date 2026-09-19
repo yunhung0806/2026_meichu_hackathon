@@ -195,6 +195,18 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["sources"][0]["source"], "foodkeeper/蘋果")
         self.assertIn("一般冷藏保存指引", data["sources"][0]["text"])
 
+    async def test_specific_food_question_has_source_without_inventory(self):
+        token = await self.identify(self.owner)
+        response = await self.client.post(
+            "/api/v1/questions",
+            headers=self.auth(token),
+            json={"question": "蘋果可以冷藏多久？"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()["data"]
+        self.assertEqual(data["status"], "LLM_NOT_CONFIGURED")
+        self.assertEqual(data["sources"][0]["source"], "foodkeeper/蘋果")
+
     async def test_question_returns_generated_answer_when_llm_is_configured(self):
         token = await self.identify(self.owner)
         await self.put(token, label="菠菜")

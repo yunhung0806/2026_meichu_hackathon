@@ -101,13 +101,23 @@ class FoodKeeperGuide:
         requested = self.lookup(question)
         selected = ([row for row in guidance if row.food_name == requested["name_zh_tw"]]
                     if requested else guidance)
-        return tuple(Passage(
+        passages = tuple(Passage(
             source=f"foodkeeper/{row.food_name}",
             text=(f"{row.label}：USDA FoodKeeper 的一般冷藏保存指引為 {row.source_text}；"
                   f"本次自放入起算的參考區間為 {row.guidance_from} 至 {row.guidance_until}，"
                   f"目前狀態 {row.status}。這是品質與保存的一般指引，不是包裝效期，"
                   "也不能單獨證明食品仍可安全食用。"),
         ) for row in selected)
+        if passages or requested is None:
+            return passages
+        minimum, maximum = requested["refrigerator_days"]
+        range_text = f"{minimum}–{maximum} 天" if minimum != maximum else f"{maximum} 天"
+        return (Passage(
+            source=f"foodkeeper/{requested['name_zh_tw']}",
+            text=(f"{requested['name_zh_tw']}：USDA FoodKeeper 的一般冷藏保存指引為"
+                  f" {requested['source_text']}（結構化區間 {range_text}）。"
+                  "這是一般指引，不是使用者庫存紀錄、包裝效期或食品安全保證。"),
+        ),)
 
 
 class LocalKnowledge:
@@ -237,6 +247,18 @@ class FoodQuestions:
         rows = self.foodkeeper.inventory_guidance(inventory, self.service._today(), timezone)
         return tuple(asdict(row) for row in rows)
 
+    def _package_date_passages(self, question, inventory):
+        requested = self.foodkeeper.lookup(question)
+        selected = inventory
+        if requested is not None:
+            selected = [item for item in inventory
+                        if self.foodkeeper.lookup(item["label"]) == requested]
+        return tuple(Passage(
+            source=f"inventory/package-date/{item['label']}",
+            text=(f"{item['label']}：使用者記錄的包裝期限為 {item['expires_on']}。"
+                  "此日期來自使用者輸入，優先於一般 FoodKeeper 保存指引。"),
+        ) for item in selected if item.get("expires_on"))
+
     def ask(self, token, question, category="storage"):
         inventory = self.service.inventory(token)  # authenticate before retrieval/generation
         if not question.strip() or len(question) > 2000:
@@ -248,9 +270,13 @@ class FoodQuestions:
         if category == "storage":
             timezone = getattr(self.service, "timezone", None)
             guidance = self.foodkeeper.inventory_guidance(inventory, self.service._today(), timezone)
-            passages = self.foodkeeper.passages(question, guidance) + passages
+            passages = (self._package_date_passages(question, inventory)
+                        + self.foodkeeper.passages(question, guidance) + passages)
         if not passages:
-            return Answer("NO_SOURCES", "尚無相關文件，請加入食譜或食品保存文件。")
+            return Answer(
+                "NO_SOURCES",
+                "目前庫存與 FoodKeeper 都沒有匹配資料；請先放入物品、確認食品名稱，或加入保存文件。",
+            )
         if self.llm is None:
             return Answer("LLM_NOT_CONFIGURED", "已找到參考資料，本地 LLM 尚未設定。", passages)
         prompt = (

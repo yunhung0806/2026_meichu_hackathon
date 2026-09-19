@@ -111,6 +111,9 @@ class FridgeServiceTests(unittest.TestCase):
         self.put(expires=date(2026, 10, 1))
         questions = FoodQuestions(self.service, LocalKnowledge(self.tempdir.name))
         self.assertEqual(questions.storage_guidance(self.login.token), ())
+        answer = questions.ask(self.login.token, "哪些食物要先處理？")
+        self.assertEqual(answer.status, "LLM_NOT_CONFIGURED")
+        self.assertTrue(answer.passages[0].source.startswith("inventory/package-date/"))
 
     def test_foodkeeper_alias_and_status(self):
         guide = FoodKeeperGuide.bundled()
