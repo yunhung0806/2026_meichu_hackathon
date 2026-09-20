@@ -15,7 +15,7 @@ from fridge_guardian.application import SessionCoordinator
 from fridge_guardian.application.fridge_service import FridgeService
 from fridge_guardian.application.item_inspection import ItemInspectionManager
 from fridge_guardian.domain import FrameSample, utc_now
-from fridge_guardian.station_api import StationRuntime, create_app
+from fridge_guardian.station_api import DEFAULT_ORIGINS, StationRuntime, create_app
 from tests.fakes import FakeIdentityProvider, FakeItemRecognizer, RecordingFeedback
 
 
@@ -93,6 +93,10 @@ class FakeItemVisionClient:
 
 
 class StationApiTests(unittest.IsolatedAsyncioTestCase):
+    def test_default_cors_origins_include_local_frontend_dev_port(self):
+        self.assertIn("http://localhost:3001", DEFAULT_ORIGINS)
+        self.assertIn("http://127.0.0.1:3001", DEFAULT_ORIGINS)
+
     async def asyncSetUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         self.repo = SQLiteRepository(Path(self.tempdir.name) / "station.db")
@@ -488,6 +492,17 @@ class StationApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(inventory.status_code, 200)
         self.assertEqual(inventory.json()["data"]["items"], [])
+
+        capture_calls = self.capture.calls
+        duplicate = await self.client.post(
+            "/api/v1/station/enroll", json={"display_name": " new   user "}
+        )
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        self.assertEqual(duplicate.json()["error"]["code"], "DISPLAY_NAME_TAKEN")
+        self.assertEqual(self.capture.calls, capture_calls)
+        self.assertEqual(
+            [user.display_name for user in self.repo.list_users()].count("New User"), 1
+        )
 
         blank = await self.client.post(
             "/api/v1/station/enroll", json={"display_name": "   "}

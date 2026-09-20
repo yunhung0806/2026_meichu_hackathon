@@ -26,7 +26,10 @@ from fridge_guardian.adapters.item_vision import ItemVisionClient, ItemVisionCli
 from fridge_guardian.adapters.knowledge import FoodQuestions, LemonadeLLM, LocalKnowledge
 from fridge_guardian.adapters.sqlite_repository import SQLiteRepository
 from fridge_guardian.application import SessionCoordinator
-from fridge_guardian.application.coordinator import EnrollmentError
+from fridge_guardian.application.coordinator import (
+    DuplicateDisplayNameError,
+    EnrollmentError,
+)
 from fridge_guardian.application.fridge_service import FridgeService
 from fridge_guardian.application.item_inspection import InspectionError, ItemInspectionManager
 from fridge_guardian.application.recipes import RecipeQuestions
@@ -38,6 +41,8 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_ORIGINS = (
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 )
@@ -490,7 +495,10 @@ def create_app(
             raise ApiError(422, "VALIDATION_ERROR", "Display name cannot be empty.")
         async with station.lock:
             try:
+                name = station.service.validate_new_user_name(name)
                 login = station.service.enroll(name, station.capture_enrollment())
+            except DuplicateDisplayNameError as exc:
+                raise ApiError(409, "DISPLAY_NAME_TAKEN", str(exc)) from exc
             except EnrollmentError as exc:
                 raise ApiError(422, "ENROLLMENT_FAILED", str(exc)) from exc
             return _success(

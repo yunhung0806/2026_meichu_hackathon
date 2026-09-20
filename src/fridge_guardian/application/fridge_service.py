@@ -78,6 +78,10 @@ class FridgeService:
         user = self.coordinator.enroll_user(display_name, frames)
         return self._issue_login(user)
 
+    def validate_new_user_name(self, display_name: str) -> str:
+        """Validate a local display name before the camera capture begins."""
+        return self.coordinator.validate_new_user_name(display_name)
+
     def _issue_login(self, user) -> Login:
         now = self.clock()
         self.logins = {k: v for k, v in self.logins.items() if v.expires_at > now}

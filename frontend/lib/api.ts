@@ -164,9 +164,30 @@ function warningAudioBuffer(context: AudioContext): Promise<AudioBuffer> {
 }
 
 export class StationApiError extends Error {
-  constructor(public readonly code: string, message: string) {
+  public readonly code: string;
+
+  constructor(code: string, message: string) {
     super(message);
+    this.code = code;
   }
+}
+
+export type StationPageFailure = {
+  requiresLogin: boolean;
+  message: string;
+};
+
+export function describeStationPageFailure(cause: unknown): StationPageFailure {
+  if (cause instanceof StationApiError && cause.code === "UNAUTHORIZED") {
+    return {
+      requiresLogin: true,
+      message: "登入已逾時或後端已重新啟動，請重新進行人臉辨識。",
+    };
+  }
+  return {
+    requiresLogin: false,
+    message: cause instanceof Error ? cause.message : "本機 API 發生未知錯誤",
+  };
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -177,6 +198,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const payload = (await response.json()) as Envelope<T> | ErrorEnvelope;
   if (!response.ok || !payload.success) {
     const error = "error" in payload ? payload.error : { code: "HTTP_ERROR", message: response.statusText };
+    if (error.code === "UNAUTHORIZED") accessToken = null;
     throw new StationApiError(error.code, error.message);
   }
   return payload.data;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { stationApi } from "@/lib/api";
+import { describeStationPageFailure, stationApi } from "@/lib/api";
 import type { HistoryEvent, IdentifiedUser, InventoryItem, ItemInspection, Member, OperationResult, QuestionAnswer } from "@/lib/api";
 import { canEditInventoryItem, groupInventoryItems, inventorySharingLabel, isSharedInventoryItem, saveInventoryEdit, takeChoiceOwner, takeChoiceTitle } from "@/lib/inventory-view";
 import RecipeView from "./recipe-view";
@@ -26,15 +26,28 @@ export default function Home() {
   const [selectedItemId, setSelectedItemId] = useState<string>("");
   const [addAsNew, setAddAsNew] = useState(false);
   const [error, setError] = useState("");
+  const [pageError, setPageError] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [today, setToday] = useState("今天");
 
   useEffect(() => {
-    stationApi.health().then(() => setOnline(true)).catch(() => setOnline(false));
+    let active = true;
+    const checkHealth = () => {
+      stationApi.health()
+        .then(() => { if (active) setOnline(true); })
+        .catch(() => { if (active) setOnline(false); });
+    };
+    checkHealth();
+    const healthTimer = window.setInterval(checkHealth, 3000);
     const dateTimer = window.setTimeout(() => setToday(new Intl.DateTimeFormat("zh-TW", { month: "long", day: "numeric", weekday: "long" }).format(new Date())), 0);
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const entranceTimer = window.setTimeout(() => setShowEntrance(false), reduceMotion ? 100 : 2800);
-    return () => { window.clearTimeout(dateTimer); window.clearTimeout(entranceTimer); };
+    return () => {
+      active = false;
+      window.clearInterval(healthTimer);
+      window.clearTimeout(dateTimer);
+      window.clearTimeout(entranceTimer);
+    };
   }, []);
 
   function showError(cause: unknown) {
@@ -42,18 +55,42 @@ export default function Home() {
     setFlow("error");
   }
 
+  function showPageError(cause: unknown) {
+    const failure = describeStationPageFailure(cause);
+    setPageError(failure.message);
+    setFlow("idle");
+    setError("");
+    setResult(null);
+    setInspection(null);
+    if (failure.requiresLogin) {
+      stationApi.clearToken();
+      setUser(null);
+      setInventory([]);
+      setHistory([]);
+      setMembers([]);
+      setTab("home");
+    }
+  }
+
   async function refreshInventory() {
     if (!user) return;
-    try { setInventory(await stationApi.inventory()); } catch (cause) { showError(cause); }
+    try {
+      setInventory(await stationApi.inventory());
+      setPageError("");
+    } catch (cause) { showPageError(cause); }
   }
 
   async function refreshHistory() {
     if (!user) return;
-    try { setHistory(await stationApi.history()); } catch (cause) { showError(cause); }
+    try {
+      setHistory(await stationApi.history());
+      setPageError("");
+    } catch (cause) { showPageError(cause); }
   }
 
   async function beginRecognition() {
     setError("");
+    setPageError("");
     setLabel("");
     setFlow("recognizing");
     try {
@@ -81,6 +118,7 @@ export default function Home() {
     setFlow("enrolling");
     try {
       const enrolled = await stationApi.enroll(name);
+      setPageError("");
       setUser(enrolled);
       setInventory([]);
       setMembers(await stationApi.members());
@@ -148,9 +186,28 @@ export default function Home() {
   }
 
   async function selectTab(next: Tab) {
+    setFlow("idle");
+    setError("");
+    setResult(null);
+    setInspection(null);
+    setPageError("");
     setTab(next);
     if (next === "items" && user) await refreshInventory();
     if (next === "history" && user) await refreshHistory();
+  }
+
+  async function refreshInventoryAndHistory() {
+    try {
+      const [nextInventory, nextHistory] = await Promise.all([
+        stationApi.inventory(), stationApi.history(),
+      ]);
+      setInventory(nextInventory);
+      setHistory(nextHistory);
+      setPageError("");
+    } catch (cause) {
+      showPageError(cause);
+      throw cause;
+    }
   }
 
   function closeFlow() {
@@ -175,8 +232,9 @@ export default function Home() {
     </aside>
     <section className="content">
       <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab)}</h1></div></header>
+      {pageError && <PageNotice message={pageError} onDismiss={() => setPageError("")} />}
       {tab === "home" && flow === "idle" && <HomeView inventory={inventory} online={online} user={user} onStart={beginRecognition} onEnroll={beginEnrollment} onTab={selectTab} />}
-      {tab === "items" && <ItemsView items={inventory} members={members} identified={Boolean(user)} onRefresh={async () => { const [nextInventory, nextHistory] = await Promise.all([stationApi.inventory(), stationApi.history()]); setInventory(nextInventory); setHistory(nextHistory); }} />}
+      {tab === "items" && <ItemsView items={inventory} members={members} identified={Boolean(user)} onRefresh={refreshInventoryAndHistory} />}
       {tab === "recipes" && (user ? <RecipeView key={`${user.user_id}:${user.access_token}`} /> : <UnavailableView title="請先辨識使用者" detail="回首頁辨識後，就能依你的庫存與保存期限推薦料理。" />)}
       {tab === "history" && <HistoryView events={history} identified={Boolean(user)} />}
       {tab === "ask" && <AskView identified={Boolean(user)} />}
@@ -197,6 +255,7 @@ export default function Home() {
 
 function NavButton({ active, label, icon, count, onClick }: { active: boolean; label: string; icon: string; count?: string; onClick: () => void }) { return <button className={active ? "nav-item active" : "nav-item"} onClick={onClick}><span>{icon}</span>{label}{count && <b>{count}</b>}</button>; }
 function tabTitle(tab: Tab) { return { home: "冰友 ChillMate", items: "冰箱裡有什麼？", recipes: "食譜推薦", history: "使用紀錄", ask: "問問你的冰箱" }[tab]; }
+function PageNotice({ message, onDismiss }: { message: string; onDismiss: () => void }) { return <div className="page-notice" role="alert"><span>!</span><p>{message}</p><button onClick={onDismiss} aria-label="關閉提示">×</button></div>; }
 
 function EntranceIntro({ onSkip }: { onSkip: () => void }) {
   return <button className="entrance-intro" onClick={onSkip} aria-label="跳過進場動畫">
