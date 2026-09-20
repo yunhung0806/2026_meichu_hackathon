@@ -45,7 +45,8 @@ All success responses use `{"success": true, "data": ...}`. Errors use:
 | POST | `/api/v1/station/inspect` | Yes | Yes | Recheck the same user and inspect one item without changing inventory |
 | POST | `/api/v1/station/operate` | Yes | No | Explicitly confirm one unexpired inspection and atomically change inventory |
 | GET | `/api/v1/members` | Yes | No | List other registered users available as explicit share recipients |
-| GET | `/api/v1/inventory` | Yes | No | Return present items the current user owns or may access through sharing |
+| GET | `/api/v1/inventory` | Yes | No | Return every present item with viewer-specific edit/take permissions |
+| PATCH | `/api/v1/inventory/{item_id}` | Yes | No | Owner-only label, expiry, and public-sharing edit |
 | GET | `/api/v1/history` | Yes | No | Return the current identified user's recent local interaction events |
 | POST | `/api/v1/questions` | Yes | No | Retrieve inventory-aware FoodKeeper/Markdown passages |
 | POST | `/api/v1/recipes/recommend` | Yes | No | Rank local recipes using the user's inventory and near-expiry items |
@@ -262,9 +263,14 @@ Header: `Authorization: Bearer <access_token>`.
         "item_id": "opaque-item-id",
         "label": "milk",
         "owner_id": "opaque-user-id",
+        "owner_display_name": "Enoch",
         "owner_name": "Enoch",
-        "shared": 1,
+        "shared": false,
         "access_type": "SHARED_DIRECT",
+        "can_edit": false,
+        "can_take": true,
+        "shared_user_ids": [],
+        "shared_user_names": [],
         "put_at": "2026-09-19T08:08:00+00:00",
         "expires_on": "2026-09-22"
       }
@@ -273,14 +279,42 @@ Header: `Authorization: Bearer <access_token>`.
 }
 ```
 
-The browser groups rows only for display when owner, normalized label, and
-sharing mode match. The count represents distinct opaque `item_id` rows; item
-identity and instance embeddings remain separate in SQLite.
+Every authenticated fridge user sees every present row. `can_edit` is true only
+for the owner. `can_take` is true for the owner, an all-user shared row, or an
+existing direct share. A private row is therefore visible to another user but
+is neither editable nor selectable for take-out. The browser groups only by
+trimmed, case-insensitive label for display; every opaque `item_id`, expiry,
+owner, sharing state, and put-in time remains independent in SQLite. Biometric
+templates, images, embeddings, tokens, and removed rows are never returned.
 
-The current `FridgeService` returns present items owned by the identified user,
-shared with all users by legacy data, or explicitly shared with the identified
-user through `item_shares`. It does not expose biometric templates, raw images,
-or removed records.
+## `PATCH /api/v1/inventory/{item_id}`
+
+Header: `Authorization: Bearer <access_token>`.
+
+The owner may send any non-empty subset of:
+
+```json
+{
+  "label": "麥香紅茶",
+  "expires_on": "2026-09-25",
+  "shared": false,
+  "shared_user_ids": ["opaque-user-id"]
+}
+```
+
+`label` is trimmed and must contain 1–200 characters. `expires_on` is an ISO
+date or `null`. `shared` is a JSON boolean retained for all-user compatibility;
+`shared_user_ids` selects specific registered users and cannot be combined with
+`shared=true`. Unknown recipients are rejected. Unknown fields, `item_id`, owner,
+timestamps, presence, and embeddings are rejected. Unknown rows return 404,
+valid non-owners return 403, and absent rows return 409. Setting `shared=false`
+with an empty recipient list revokes direct grants so the item becomes
+owner-only. The response includes owner-visible recipient IDs/names using the
+same public inventory representation. Every successful update creates an
+`INVENTORY_EDIT` / `ITEM_UPDATED` local history event.
+
+The management inventory is global, but recipe and FoodKeeper/RAG retrieval
+continue to use only food the current user owns or may take through sharing.
 
 ## `POST /api/v1/questions`
 
@@ -337,6 +371,9 @@ Lemonade response reports `LLM_UNAVAILABLE` while preserving the sources.
 | `FRIDGE_SFACE_PATH` | bundled model path under `models/` |
 | `FRIDGE_ITEM_VISION_URL` | `http://127.0.0.1:8765` (loopback only) |
 | `FRIDGE_ITEM_VISION_TIMEOUT` | `60` seconds |
+| `FRIDGE_WARNING_AUDIO_PATH` | unset; local `.mp3`/`.wav`, kept outside Git |
+| `FRIDGE_WARNING_AUDIO_MODE` | `browser` when a file is configured, otherwise `system` |
+| `FRIDGE_RECIPE_DIR` | bundled `data/knowledge/recipes` |
 | `FRIDGE_LEMONADE_MODEL` | unset (retrieval only) |
 | `FRIDGE_LEMONADE_BASE_URL` | `http://127.0.0.1:13305/v1` |
 | `FRIDGE_LEMONADE_TIMEOUT` | `60` seconds |

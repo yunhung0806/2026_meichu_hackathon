@@ -16,7 +16,7 @@ from fastapi import FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fridge_guardian.adapters.camera import OpenCVCamera
 from fridge_guardian.adapters.face import FaceRecognitionSettings, SFaceIdentityProvider
@@ -65,6 +65,31 @@ class OperateRequest(BaseModel):
     shared: bool = False
     shared_user_ids: list[str] = Field(default_factory=list, max_length=50)
     expires_on: date | None = None
+
+
+class InventoryUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None = Field(default=None, max_length=200)
+    expires_on: date | None = None
+    shared: bool | None = None
+    shared_user_ids: list[str] | None = Field(default=None, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_edit(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one editable field is required")
+        if "label" in self.model_fields_set and (
+            self.label is None or not self.label.strip()
+        ):
+            raise ValueError("label must contain 1–200 characters")
+        if "shared" in self.model_fields_set and self.shared is None:
+            raise ValueError("shared must be a boolean")
+        if "shared_user_ids" in self.model_fields_set and self.shared_user_ids is None:
+            raise ValueError("shared_user_ids must be a list")
+        if self.shared is True and self.shared_user_ids:
+            raise ValueError("Choose all-user sharing or selected users, not both")
+        return self
 
 
 class QuestionRequest(BaseModel):
@@ -366,7 +391,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(allowed_origins or _origins_from_environment()),
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -547,6 +572,38 @@ def create_app(
             except PermissionError as exc:
                 raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
             return _success({"items": items})
+
+    @api.patch("/api/v1/inventory/{item_id}")
+    async def update_inventory(
+        item_id: str,
+        payload: InventoryUpdateRequest,
+        request: Request,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        station: StationRuntime = request.app.state.station
+        token = _token(authorization)
+        async with station.lock:
+            try:
+                updated = station.service.update_inventory(
+                    token,
+                    item_id,
+                    payload.model_dump(exclude_unset=True),
+                )
+            except KeyError as exc:
+                raise ApiError(404, "ITEM_NOT_FOUND", str(exc)) from exc
+            except RuntimeError as exc:
+                raise ApiError(409, "ITEM_NOT_PRESENT", str(exc)) from exc
+            except PermissionError as exc:
+                # A valid login without ownership is forbidden; an invalid login
+                # is still reported as authentication failure.
+                try:
+                    station.service._login(token)
+                except PermissionError:
+                    raise ApiError(401, "UNAUTHORIZED", str(exc)) from exc
+                raise ApiError(403, "NOT_OWNER", str(exc)) from exc
+            except ValueError as exc:
+                raise ApiError(422, "VALIDATION_ERROR", str(exc)) from exc
+            return _success(updated)
 
     @api.get("/api/v1/members")
     async def members(

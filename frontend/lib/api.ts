@@ -10,9 +10,14 @@ export type InventoryItem = {
   item_id: string;
   label: string;
   owner_id: string;
+  owner_display_name: string;
   owner_name?: string;
-  shared: number;
-  access_type: "OWNER" | "SHARED_ALL" | "SHARED_DIRECT";
+  shared: boolean;
+  access_type: "OWNER" | "SHARED_ALL" | "SHARED_DIRECT" | "PRIVATE_VISIBLE";
+  can_edit: boolean;
+  can_take: boolean;
+  shared_user_ids: string[];
+  shared_user_names: string[];
   put_at: string;
   expires_on: string | null;
 };
@@ -25,7 +30,7 @@ export type Member = {
 export type HistoryEvent = {
   event_id: string;
   session_id: string;
-  action: "PUT_IN" | "TAKE_OUT";
+  action: "PUT_IN" | "TAKE_OUT" | "INVENTORY_EDIT";
   decision: string;
   occurred_at: string;
   item_id: string | null;
@@ -54,6 +59,8 @@ export type ItemCandidate = {
   similarity?: number;
   shared: boolean | number;
   owner_id?: string;
+  owner_display_name?: string;
+  owner_name?: string;
   put_at?: string;
   expires_on?: string | null;
 };
@@ -124,6 +131,37 @@ const API_BASE_URL = (
 ).replace(/\/$/, "");
 
 let accessToken: string | null = null;
+let warningAudioContext: AudioContext | null = null;
+let warningAudioBufferPromise: Promise<AudioBuffer> | null = null;
+
+function getWarningAudioContext(): AudioContext {
+  if (typeof window === "undefined" || typeof window.AudioContext === "undefined") {
+    throw new Error("這個瀏覽器不支援警示音效");
+  }
+  warningAudioContext ??= new window.AudioContext();
+  return warningAudioContext;
+}
+
+async function loadWarningAudio(context: AudioContext): Promise<AudioBuffer> {
+  const headers = new Headers();
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(`${API_BASE_URL}/api/v1/station/warning-audio`, {
+    headers,
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error("警示音效尚未設定");
+  return context.decodeAudioData(await response.arrayBuffer());
+}
+
+function warningAudioBuffer(context: AudioContext): Promise<AudioBuffer> {
+  if (warningAudioBufferPromise) return warningAudioBufferPromise;
+  const loading = loadWarningAudio(context);
+  warningAudioBufferPromise = loading;
+  void loading.catch(() => {
+    if (warningAudioBufferPromise === loading) warningAudioBufferPromise = null;
+  });
+  return loading;
+}
 
 export class StationApiError extends Error {
   constructor(public readonly code: string, message: string) {
@@ -151,25 +189,19 @@ export const stationApi = {
     return `${API_BASE_URL}/api/v1/station/preview?revision=${revision}`;
   },
 
+  armWarningAudio() {
+    const context = getWarningAudioContext();
+    if (context.state === "suspended") void context.resume().catch(() => undefined);
+    void warningAudioBuffer(context);
+  },
+
   async playWarningAudio() {
-    const headers = new Headers();
-    if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-    const response = await fetch(`${API_BASE_URL}/api/v1/station/warning-audio`, {
-      headers,
-      cache: "no-store",
-    });
-    if (!response.ok) throw new Error("警示音效尚未設定");
-    const url = URL.createObjectURL(await response.blob());
-    const audio = new Audio(url);
-    const release = () => URL.revokeObjectURL(url);
-    audio.addEventListener("ended", release, { once: true });
-    audio.addEventListener("error", release, { once: true });
-    try {
-      await audio.play();
-    } catch (cause) {
-      release();
-      throw cause;
-    }
+    const context = getWarningAudioContext();
+    if (context.state === "suspended") await context.resume();
+    const source = context.createBufferSource();
+    source.buffer = await warningAudioBuffer(context);
+    source.connect(context.destination);
+    source.start();
   },
 
   health() {
@@ -217,6 +249,18 @@ export const stationApi = {
 
   inventory() {
     return request<{ items: InventoryItem[] }>("/api/v1/inventory").then(({ items }) => items);
+  },
+
+  updateInventory(itemId: string, payload: {
+    label?: string;
+    expires_on?: string | null;
+    shared?: boolean;
+    shared_user_ids?: string[];
+  }) {
+    return request<InventoryItem>(`/api/v1/inventory/${encodeURIComponent(itemId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
   },
 
   members() {

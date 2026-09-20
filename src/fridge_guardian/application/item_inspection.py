@@ -423,6 +423,7 @@ class ItemInspectionManager:
         self, action: Action, user_id: str, raw: Sequence[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         eligible: list[dict[str, Any]] = []
+        user_names = {user.user_id: user.display_name for user in self.repo.list_users()}
         for candidate in raw:  # Preserve sidecar order; the backend never reranks.
             item_id = str(candidate["item_id"])
             item, state = self._present_item(item_id)
@@ -440,7 +441,18 @@ class ItemInspectionManager:
                         "item_id": item_id,
                         "label": item.label,
                         "similarity": float(candidate["similarity"]),
-                        "shared": bool(state["shared"]) if state is not None else False,
+                        "owner_id": item.owner_id,
+                        "owner_display_name": user_names.get(item.owner_id, "Unknown"),
+                        "owner_name": user_names.get(item.owner_id, "Unknown"),
+                        "shared": bool(
+                            state is not None
+                            and (
+                                state["shared"]
+                                or self.repo.is_shared_with(item_id, user_id)
+                            )
+                        ),
+                        "put_at": state["put_at"] if state is not None else None,
+                        "expires_on": state["expires_on"] if state is not None else None,
                     }
                 )
         return eligible
@@ -567,13 +579,23 @@ class ItemInspectionManager:
 
     def _authorized_inventory(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.repo.connection.execute(
-            """SELECT i.item_id, i.label, i.owner_id, s.shared, s.put_at, s.expires_on
-               FROM inventory s JOIN items i USING(item_id)
+            """SELECT i.item_id, i.label, i.owner_id,
+                      u.display_name AS owner_display_name,
+                      u.display_name AS owner_name,
+                      CASE WHEN s.shared=1 OR EXISTS (
+                        SELECT 1 FROM item_shares any_share
+                        WHERE any_share.item_id=i.item_id
+                      ) THEN 1 ELSE 0 END AS shared,
+                      s.put_at, s.expires_on
+               FROM inventory s
+               JOIN items i USING(item_id)
+               JOIN users u ON u.user_id=i.owner_id
                WHERE s.present=1 AND (
                  i.owner_id=? OR s.shared=1 OR EXISTS (
                    SELECT 1 FROM item_shares x WHERE x.item_id=i.item_id AND x.user_id=?
                  )
-               ) ORDER BY s.put_at""",
+               )
+               ORDER BY (s.expires_on IS NULL), s.expires_on, s.put_at, i.item_id""",
             (user_id, user_id),
         ).fetchall()
         return [dict(row) for row in rows]

@@ -44,7 +44,12 @@ class FridgeServiceTests(unittest.TestCase):
         denied = self.service.process(other.token, Action.TAKE_OUT, frames())
         self.assertEqual(denied.decision.code, DecisionCode.WARN_NOT_OWNER)
         self.assertEqual(len(self.service.inventory(self.login.token)), 1)
-        self.assertEqual(self.service.inventory(other.token), [])
+        visible = self.service.inventory(other.token)
+        self.assertEqual(len(visible), 1)
+        self.assertEqual(visible[0]["access_type"], "PRIVATE_VISIBLE")
+        self.assertFalse(visible[0]["can_edit"])
+        self.assertFalse(visible[0]["can_take"])
+        self.assertEqual(self.service.accessible_inventory(other.token), [])
         denied_put = self.service.process(other.token, Action.PUT_IN, frames(), PutOptions("stolen", True))
         self.assertEqual(denied_put.decision.code, DecisionCode.WARN_NOT_OWNER)
         self.identity.user_id = self.owner.user_id

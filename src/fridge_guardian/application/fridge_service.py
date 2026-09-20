@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from secrets import token_urlsafe
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fridge_guardian.application.coordinator import SessionCoordinator
@@ -95,29 +96,161 @@ class FridgeService:
         self.logins.pop(token, None)
 
     def inventory(self, token):
+        """Return every present record, with permissions for the signed-in viewer."""
         user = self._login(token)
-        return [dict(row) for row in self.repo.connection.execute("""
-            SELECT i.item_id, i.label, i.owner_id, u.display_name AS owner_name,
-                   CASE WHEN s.shared=1 OR EXISTS (
-                     SELECT 1 FROM item_shares x WHERE x.item_id=i.item_id
-                   ) THEN 1 ELSE 0 END AS shared,
+        return self._inventory_rows(user.user_id, authorized_only=False)
+
+    def accessible_inventory(self, token):
+        """Return only food the viewer may use; recipes/RAG intentionally use this."""
+        user = self._login(token)
+        return self._inventory_rows(user.user_id, authorized_only=True)
+
+    def _inventory_rows(self, user_id: str, *, authorized_only: bool):
+        authorization_filter = """AND (
+            i.owner_id=:user_id OR s.shared=1 OR EXISTS (
+              SELECT 1 FROM item_shares granted
+              WHERE granted.item_id=i.item_id AND granted.user_id=:user_id
+            )
+        )""" if authorized_only else ""
+        rows = self.repo.connection.execute(f"""
+            SELECT i.item_id, i.label, i.owner_id,
+                   u.display_name AS owner_display_name,
+                   u.display_name AS owner_name,
+                   s.shared AS shared,
                    CASE
-                     WHEN i.owner_id=? THEN 'OWNER'
+                     WHEN i.owner_id=:user_id THEN 'OWNER'
                      WHEN s.shared=1 THEN 'SHARED_ALL'
-                     ELSE 'SHARED_DIRECT'
+                     WHEN EXISTS (
+                       SELECT 1 FROM item_shares direct_share
+                       WHERE direct_share.item_id=i.item_id
+                         AND direct_share.user_id=:user_id
+                     ) THEN 'SHARED_DIRECT'
+                     ELSE 'PRIVATE_VISIBLE'
                    END AS access_type,
+                   CASE WHEN i.owner_id=:user_id THEN 1 ELSE 0 END AS can_edit,
+                   CASE WHEN i.owner_id=:user_id OR s.shared=1 OR EXISTS (
+                     SELECT 1 FROM item_shares take_share
+                     WHERE take_share.item_id=i.item_id
+                       AND take_share.user_id=:user_id
+                   ) THEN 1 ELSE 0 END AS can_take,
                    s.put_at, s.expires_on
             FROM inventory s
             JOIN items i USING(item_id)
-            JOIN users u ON u.user_id = i.owner_id
-            WHERE s.present=1 AND (
-              i.owner_id=? OR s.shared=1 OR EXISTS (
-                SELECT 1 FROM item_shares x
-                WHERE x.item_id=i.item_id AND x.user_id=?
-              )
+            JOIN users u ON u.user_id=i.owner_id
+            WHERE s.present=1 {authorization_filter}
+            ORDER BY (s.expires_on IS NULL), s.expires_on, s.put_at, i.item_id
+        """, {"user_id": user_id}).fetchall()
+        result = []
+        for row in rows:
+            public = dict(row)
+            public["shared"] = bool(public["shared"])
+            public["can_edit"] = bool(public["can_edit"])
+            public["can_take"] = bool(public["can_take"])
+            if public["can_edit"]:
+                recipients = self.repo.connection.execute(
+                    """SELECT share.user_id, user.display_name
+                       FROM item_shares share
+                       JOIN users user ON user.user_id=share.user_id
+                       WHERE share.item_id=?
+                       ORDER BY user.created_at, user.user_id""",
+                    (public["item_id"],),
+                ).fetchall()
+                public["shared_user_ids"] = [entry["user_id"] for entry in recipients]
+                public["shared_user_names"] = [entry["display_name"] for entry in recipients]
+            else:
+                public["shared_user_ids"] = []
+                public["shared_user_names"] = []
+            result.append(public)
+        return result
+
+    def update_inventory(self, token, item_id: str, changes: dict[str, object]):
+        """Update owner-controlled metadata without changing item identity or presence."""
+        login = self._login(token)
+        allowed = {"label", "expires_on", "shared", "shared_user_ids"}
+        if not changes or set(changes) - allowed:
+            raise ValueError("Update label, expires_on, shared, or shared_user_ids only")
+        item = self.repo.get_item(item_id)
+        state = self.repo.connection.execute(
+            "SELECT * FROM inventory WHERE item_id=?", (item_id,)
+        ).fetchone()
+        if item is None or state is None:
+            raise KeyError("Inventory item was not found")
+        if item.owner_id != login.user_id:
+            raise PermissionError("Only the owner may edit this inventory item")
+        if not state["present"]:
+            raise RuntimeError("Only present inventory items may be edited")
+
+        label = changes.get("label")
+        if "label" in changes:
+            if not isinstance(label, str) or not label.strip() or len(label.strip()) > 200:
+                raise ValueError("label must contain 1–200 characters")
+            label = label.strip()
+        expires_on = changes.get("expires_on")
+        if "expires_on" in changes and expires_on is not None and type(expires_on) is not date:
+            raise ValueError("expires_on must be a date or null")
+        shared = changes.get("shared")
+        if "shared" in changes and type(shared) is not bool:
+            raise ValueError("shared must be a boolean")
+        shared_user_ids = changes.get("shared_user_ids", [])
+        if "shared_user_ids" in changes:
+            if not isinstance(shared_user_ids, list) or any(
+                not isinstance(value, str) for value in shared_user_ids
+            ):
+                raise ValueError("shared_user_ids must be a list of user IDs")
+            shared_user_ids = list(dict.fromkeys(shared_user_ids))
+            if login.user_id in shared_user_ids:
+                raise ValueError("The owner cannot be a share recipient")
+            known_users = {user.user_id for user in self.repo.list_users()}
+            if any(value not in known_users for value in shared_user_ids):
+                raise ValueError("One or more selected sharing users are invalid")
+        if shared is True and shared_user_ids:
+            raise ValueError("Choose all-user sharing or selected users, not both")
+
+        sharing_changed = "shared" in changes or "shared_user_ids" in changes
+        effective_shared = bool(shared) if "shared" in changes else False
+        event_id = str(uuid4())
+        session_id = f"inventory-edit:{uuid4()}"
+        occurred_at = self.clock().isoformat()
+
+        with self.repo.connection:
+            if "label" in changes:
+                self.repo.connection.execute(
+                    "UPDATE items SET label=? WHERE item_id=?", (label, item_id)
+                )
+            if "expires_on" in changes:
+                self.repo.connection.execute(
+                    "UPDATE inventory SET expires_on=? WHERE item_id=?",
+                    (expires_on.isoformat() if expires_on else None, item_id),
+                )
+            if sharing_changed:
+                self.repo.connection.execute(
+                    "UPDATE inventory SET shared=? WHERE item_id=?",
+                    (int(effective_shared), item_id),
+                )
+                self.repo.connection.execute(
+                    "DELETE FROM item_shares WHERE item_id=?", (item_id,)
+                )
+                self.repo.connection.executemany(
+                    "INSERT INTO item_shares(item_id, user_id, created_at) VALUES (?, ?, ?)",
+                    [(item_id, user_id, occurred_at) for user_id in shared_user_ids],
+                )
+            self.repo.connection.execute(
+                """INSERT INTO interaction_events(
+                       event_id, session_id, action, decision, occurred_at,
+                       user_id, item_id, identity_confidence, identity_status,
+                       identity_second_score, identity_margin, identity_valid_frames,
+                       identity_vote_ratio, item_confidence
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN_USER', 0, 0, 0, 0, 0)""",
+                (
+                    event_id, session_id, Action.INVENTORY_EDIT.value,
+                    DecisionCode.ITEM_UPDATED.value, occurred_at,
+                    login.user_id, item_id,
+                ),
             )
-            ORDER BY s.put_at
-        """, (user.user_id, user.user_id, user.user_id))]
+        return next(
+            row for row in self._inventory_rows(login.user_id, authorized_only=False)
+            if row["item_id"] == item_id
+        )
 
     def members(self, token):
         """List registered users that the signed-in user may share items with."""

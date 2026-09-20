@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { stationApi } from "@/lib/api";
 import type { HistoryEvent, IdentifiedUser, InventoryItem, ItemInspection, Member, OperationResult, QuestionAnswer } from "@/lib/api";
+import { canEditInventoryItem, groupInventoryItems, inventorySharingLabel, isSharedInventoryItem, saveInventoryEdit, takeChoiceOwner, takeChoiceTitle } from "@/lib/inventory-view";
 import RecipeView from "./recipe-view";
 
 type Tab = "home" | "items" | "recipes" | "history" | "ask";
@@ -91,6 +92,9 @@ export default function Home() {
   }
 
   async function scanItem(action: "PUT_IN" | "TAKE_OUT") {
+    if (action === "TAKE_OUT") {
+      try { stationApi.armWarningAudio(); } catch { /* A visible replay button remains available. */ }
+    }
     setError("");
     setLabel("");
     setSelectedItemId("");
@@ -102,7 +106,11 @@ export default function Home() {
       const next = await stationApi.inspect(action);
       setInspection(next);
       if (next.review_decision === "WARN_NOT_OWNER") {
-        void stationApi.playWarningAudio().catch(() => undefined);
+        try {
+          await stationApi.playWarningAudio();
+        } catch {
+          setError("警示音未能自動播放，請按「播放警示音」。");
+        }
       }
       setLabel(next.suggested_label);
       if (action === "PUT_IN") {
@@ -168,7 +176,7 @@ export default function Home() {
     <section className="content">
       <header className="topbar"><div><span className="eyebrow">{today}</span><h1>{tabTitle(tab)}</h1></div></header>
       {tab === "home" && flow === "idle" && <HomeView inventory={inventory} online={online} user={user} onStart={beginRecognition} onEnroll={beginEnrollment} onTab={selectTab} />}
-      {tab === "items" && <ItemsView items={inventory} identified={Boolean(user)} ownerName={user?.display_name ?? ""} />}
+      {tab === "items" && <ItemsView items={inventory} members={members} identified={Boolean(user)} onRefresh={async () => { const [nextInventory, nextHistory] = await Promise.all([stationApi.inventory(), stationApi.history()]); setInventory(nextInventory); setHistory(nextHistory); }} />}
       {tab === "recipes" && (user ? <RecipeView key={`${user.user_id}:${user.access_token}`} /> : <UnavailableView title="請先辨識使用者" detail="回首頁辨識後，就能依你的庫存與保存期限推薦料理。" />)}
       {tab === "history" && <HistoryView events={history} identified={Boolean(user)} />}
       {tab === "ask" && <AskView identified={Boolean(user)} />}
@@ -179,7 +187,7 @@ export default function Home() {
       {flow === "enrolling" && <Recognizing text="正在建立你的人臉資料" enrollment />}
       {flow === "menu" && user && <ActionMenu user={user} onPut={() => void scanItem("PUT_IN")} onTake={() => void scanItem("TAKE_OUT")} />}
       {flow === "scanning" && <Recognizing text="正在掃描物品，此階段不會修改庫存" />}
-      {flow === "review" && inspection && <ReviewItem inspection={inspection} label={label} setLabel={setLabel} selectedItemId={selectedItemId} setSelectedItemId={setSelectedItemId} addAsNew={addAsNew} setAddAsNew={setAddAsNew} members={members} shareUserIds={shareUserIds} setShareUserIds={setShareUserIds} expiry={expiry} setExpiry={setExpiry} error={error} onConfirm={() => void commitInspection()} onRescan={() => void scanItem(inspection.action)} />}
+      {flow === "review" && inspection && <ReviewItem inspection={inspection} label={label} setLabel={setLabel} selectedItemId={selectedItemId} setSelectedItemId={setSelectedItemId} addAsNew={addAsNew} setAddAsNew={setAddAsNew} members={members} shareUserIds={shareUserIds} setShareUserIds={setShareUserIds} expiry={expiry} setExpiry={setExpiry} error={error} onPlayWarning={async () => { try { await stationApi.playWarningAudio(); setError(""); } catch (cause) { setError(cause instanceof Error ? cause.message : "無法播放警示音。"); } }} onConfirm={() => void commitInspection()} onRescan={() => void scanItem(inspection.action)} />}
       {flow === "committing" && <Recognizing text="正在確認並更新庫存" />}
       {flow === "result" && result && <ResultView result={result} onDone={closeFlow} />}
       {flow === "error" && <ErrorView message={error} onRetry={beginRecognition} />}
@@ -225,54 +233,99 @@ function CameraPreview({ guidance }: { guidance: string }) {
 
 function HomeView({ inventory, online, user, onStart, onEnroll, onTab }: { inventory: InventoryItem[]; online: boolean; user: IdentifiedUser | null; onStart: () => void; onEnroll: () => void; onTab: (tab: Tab) => Promise<void> }) {
   const expiring = inventory.filter(item => item.expires_on).length;
-  const shared = inventory.filter(item => Boolean(item.shared)).length;
+  const shared = inventory.filter(isSharedInventoryItem).length;
   return <div className="page-grid"><section className="hero-card"><div className="hero-copy"><h2>{user ? `你好，${user.display_name}` : "請登入以繼續使用"}</h2><p>{user ? "歡迎回來，選擇放入或取出物品開始使用。" : "站到鏡頭前，讓冰友辨識你並載入專屬庫存。"}</p><div className="identity-actions"><button className="primary-button" onClick={onStart} disabled={!online}><span className="scan-icon">◎</span>{online ? (user ? "重新辨識使用者" : "開始人臉辨識") : "等待本機 API"}<b>→</b></button><button className="secondary-button" onClick={onEnroll} disabled={!online}><span>＋</span>我是新人</button></div></div><div className="camera-visual" aria-hidden="true"><div className="camera-ring smart-core"><span className="orbit orbit-one"></span><span className="orbit orbit-two"></span><span className="orbit orbit-three"></span><div className="smart-fridge"><span className="ai-lens"><i></i></span><b></b><em></em></div><div className="signal-ring signal-one"></div><div className="signal-ring signal-two"></div><span className="scan-sweep"></span></div></div></section><section className="home-hub" aria-label="冰箱快速入口"><DashboardCard className="inventory-tile" icon="▦" eyebrow="INVENTORY" label="目前庫存" value={inventory.length} detail="查看所有已登記物品" onClick={() => void onTab("items")} /><DashboardCard className="expiry-tile" icon="◷" eyebrow="EXPIRY" label="有期限紀錄" value={expiring} detail="掌握需要優先處理的食物" onClick={() => void onTab("items")} /><DashboardCard className="shared-tile" icon="♙" eyebrow="SHARED" label="共用物品" value={shared} detail="每位成員都能安心取用" onClick={() => void onTab("items")} /><button className="dashboard-card ask-tile" onClick={() => void onTab("ask")}><span className="dashboard-icon">✦</span><span className="dashboard-copy"><small>FOODKEEPER RAG</small><strong>問問你的冰箱</strong><em>依真實庫存與保存指引回答你的問題</em></span><span className="card-arrow">開始提問 →</span></button></section></div>;
 }
 
 function DashboardCard({ className, icon, eyebrow, label, value, detail, onClick }: { className: string; icon: string; eyebrow: string; label: string; value: number; detail: string; onClick: () => void }) { return <button className={`dashboard-card ${className}`} onClick={onClick}><span className="dashboard-icon">{icon}</span><span className="dashboard-copy"><small>{eyebrow}</small><strong>{label}</strong><em>{detail}</em></span><span className="dashboard-value">{value}<small>件</small></span><span className="card-arrow">查看 →</span></button>; }
-function ItemsView({ items, identified, ownerName }: { items: InventoryItem[]; identified: boolean; ownerName: string }) {
-  const groups = Array.from(items.reduce((result, item) => {
-    const normalizedLabel = item.label.trim().toLocaleLowerCase("zh-TW");
-    const key = `${item.owner_id}\u0000${normalizedLabel}\u0000${Boolean(item.shared)}`;
-    const group = result.get(key);
-    if (!group) {
-      result.set(key, {
-        key,
-        label: item.label,
-        ownerName: item.owner_name || ownerName || "目前使用者",
-        shared: Boolean(item.shared),
-        count: 1,
-        latestPutAt: item.put_at,
-        earliestExpiry: item.expires_on,
-      });
-      return result;
+function ItemsView({ items, members, identified, onRefresh }: { items: InventoryItem[]; members: Member[]; identified: boolean; onRefresh: () => Promise<void> }) {
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [editing, setEditing] = useState<{ itemId: string; label: string; expiry: string; sharedUserIds: string[] } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const groups = groupInventoryItems(items);
+
+  function beginEdit(item: InventoryItem) {
+    setEditError("");
+    setEditing({
+      itemId: item.item_id,
+      label: item.label,
+      expiry: item.expires_on ?? "",
+      sharedUserIds: item.shared
+        ? members.map(member => member.user_id)
+        : item.shared_user_ids,
+    });
+  }
+
+  async function saveEdit() {
+    if (!editing || !editing.label.trim()) {
+      setEditError("名稱不可為空白。");
+      return;
     }
-    group.count += 1;
-    if (item.put_at > group.latestPutAt) group.latestPutAt = item.put_at;
-    if (item.expires_on && (!group.earliestExpiry || item.expires_on < group.earliestExpiry)) {
-      group.earliestExpiry = item.expires_on;
+    setSaving(true);
+    setEditError("");
+    try {
+      await saveInventoryEdit(
+        () => stationApi.updateInventory(editing.itemId, {
+          label: editing.label.trim(),
+          expires_on: editing.expiry || null,
+          shared: false,
+          shared_user_ids: editing.sharedUserIds,
+        }),
+        onRefresh,
+      );
+      setEditing(null);
+    } catch (cause) {
+      setEditError(cause instanceof Error ? cause.message : "無法儲存物品資料");
+    } finally {
+      setSaving(false);
     }
-    return result;
-  }, new Map<string, {
-    key: string;
-    label: string;
-    ownerName: string;
-    shared: boolean;
-    count: number;
-    latestPutAt: string;
-    earliestExpiry: string | null;
-  }>()).values());
+  }
 
   return <div className="page-stack">
     <div className="filter-row"><button className="chip selected">目前庫存 {items.length} 件 · {groups.length} 組</button></div>
     {!identified ? <UnavailableView title="請先辨識使用者" /> : items.length === 0 ? <UnavailableView title="目前沒有物品" /> : <div className="inventory-grid">
-      {groups.map(group => <article className="food-card" key={group.key}>
-        <div className="food-emoji">▣</div>
-        <div className="expiry-badge fresh">{group.earliestExpiry ? `最近期限 ${group.earliestExpiry}` : "未填期限"}</div>
-        <h3>{group.label} × {group.count}</h3>
-        <p>{group.shared ? "共用" : "個人"} · 擁有者：{group.ownerName}</p>
-        <div className="card-meta"><span>最近放入</span><strong>{formatTime(group.latestPutAt)}</strong></div>
-      </article>)}
+      {groups.map(group => {
+        const expanded = expandedKeys.includes(group.key);
+        const owners = new Set(group.items.map(item => item.owner_id));
+        const expiries = new Set(group.items.map(item => item.expires_on ?? ""));
+        return <article className="food-card inventory-group-card" key={group.key}>
+          <button className="inventory-group-toggle" aria-expanded={expanded} onClick={() => setExpandedKeys(expanded ? expandedKeys.filter(key => key !== group.key) : [...expandedKeys, group.key])}>
+            <span className="food-emoji">▣</span>
+            <span className="inventory-group-copy">
+              <span className="expiry-badge fresh">{group.earliestExpiry ? `最近期限 ${group.earliestExpiry}` : "未填期限"}</span>
+              <strong>{group.label} × {group.items.length}</strong>
+              <small>{owners.size > 1 ? "多位擁有者" : group.items[0].owner_display_name} · {expiries.size > 1 ? "多個期限" : "相同期限"}</small>
+            </span>
+            <b>{expanded ? "收合" : "查看明細"}</b>
+          </button>
+          {expanded && <div className="inventory-records">
+            {group.items.map(item => <section className="inventory-record" key={item.item_id}>
+              <div className="inventory-record-main">
+                <strong>{item.label}</strong>
+                <span className={item.expires_on ? "record-expiry" : "record-expiry missing"}>{item.expires_on ?? "未填期限"}</span>
+              </div>
+              <div className="inventory-record-meta">
+                <span>擁有者：{item.owner_display_name}</span>
+                <span>放入：{formatTime(item.put_at)}</span>
+                <span>{inventorySharingLabel(item)}</span>
+                <span>{item.can_take ? "可取出" : "僅可查看"}</span>
+              </div>
+              {canEditInventoryItem(item) ? <button className="inventory-edit-button" onClick={() => beginEdit(item)}>✎ 編輯這筆</button> : null}
+              {editing?.itemId === item.item_id && <div className="inventory-edit-form">
+                <label>名稱<input maxLength={200} value={editing.label} disabled={saving} onChange={event => setEditing({ ...editing, label: event.target.value })} /></label>
+                <label>期限<input type="date" value={editing.expiry} disabled={saving} onChange={event => setEditing({ ...editing, expiry: event.target.value })} /></label>
+                <fieldset className="inventory-share-picker"><legend>選擇可共用的人</legend>
+                  {members.map(member => <label key={member.user_id}><input type="checkbox" checked={editing.sharedUserIds.includes(member.user_id)} disabled={saving} onChange={() => setEditing({ ...editing, sharedUserIds: editing.sharedUserIds.includes(member.user_id) ? editing.sharedUserIds.filter(value => value !== member.user_id) : [...editing.sharedUserIds, member.user_id] })} /> {member.display_name}</label>)}
+                  {members.length === 0 && <small>目前沒有其他已登錄使用者；此物品會保持私人。</small>}
+                </fieldset>
+                {editError && <p className="rag-hint">{editError}</p>}
+                <div className="inventory-edit-actions"><button className="secondary-button" disabled={saving} onClick={() => { setEditing(null); setEditError(""); }}>取消</button><button className="primary-button compact" disabled={saving || !editing.label.trim()} onClick={() => void saveEdit()}>{saving ? "儲存中…" : "儲存"}</button></div>
+              </div>}
+            </section>)}
+          </div>}
+        </article>;
+      })}
     </div>}
   </div>;
 }
@@ -281,8 +334,8 @@ function HistoryView({ events, identified }: { events: HistoryEvent[]; identifie
   if (events.length === 0) return <UnavailableView title="目前沒有使用紀錄" />;
   return <section className="panel history-panel" aria-label="使用紀錄">
     {events.map(event => {
-      const allowed = event.decision.startsWith("ALLOW") || event.decision === "ITEM_REGISTERED";
-      const actionLabel = event.action === "PUT_IN" ? "放入" : "取出";
+      const allowed = event.decision.startsWith("ALLOW") || ["ITEM_REGISTERED", "ITEM_UPDATED"].includes(event.decision);
+      const actionLabel = event.action === "PUT_IN" ? "放入" : event.action === "TAKE_OUT" ? "取出" : "編輯";
       const itemLabel = event.item_label ?? event.item_id?.slice(0, 8) ?? "未辨識物品";
       const warningDetail = event.decision === "WARN_NOT_OWNER"
         ? event.viewer_role === "OWNER"
@@ -290,7 +343,7 @@ function HistoryView({ events, identified }: { events: HistoryEvent[]; identifie
           : `這是 ${event.related_user_name ?? "其他使用者"} 的物品，取出已阻止。`
         : null;
       return <article className="history-row" key={event.event_id}>
-        <span className={`event-icon ${allowed ? "green" : "orange"}`}>{event.action === "PUT_IN" ? "↓" : "↑"}</span>
+        <span className={`event-icon ${allowed ? "green" : "orange"}`}>{event.action === "PUT_IN" ? "↓" : event.action === "TAKE_OUT" ? "↑" : "✎"}</span>
         <div className="history-main"><strong>{actionLabel} · <em>{itemLabel}</em></strong><small>{warningDetail ?? event.decision}</small></div>
         <time dateTime={event.occurred_at}>{formatTime(event.occurred_at)}</time>
       </article>;
@@ -331,13 +384,13 @@ function needsItemChoice(inspection: ItemInspection, selectedItemId: string, add
   return !selectedItemId;
 }
 
-function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedItemId, addAsNew, setAddAsNew, members, shareUserIds, setShareUserIds, expiry, setExpiry, error, onConfirm, onRescan }: {
+function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedItemId, addAsNew, setAddAsNew, members, shareUserIds, setShareUserIds, expiry, setExpiry, error, onPlayWarning, onConfirm, onRescan }: {
   inspection: ItemInspection; label: string; setLabel: (value: string) => void;
   selectedItemId: string; setSelectedItemId: (value: string) => void;
   addAsNew: boolean; setAddAsNew: (value: boolean) => void;
   members: Member[]; shareUserIds: string[]; setShareUserIds: (value: string[]) => void;
   expiry: string; setExpiry: (value: string) => void;
-  error: string; onConfirm: () => void; onRescan: () => void;
+  error: string; onPlayWarning: () => Promise<void>; onConfirm: () => void; onRescan: () => void;
 }) {
   const isPut = inspection.action === "PUT_IN";
   const aiChoices = inspection.instance.candidates;
@@ -350,6 +403,9 @@ function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedIt
   const canCorrectTake = !isPut
     && ["MATCHED", "AMBIGUOUS"].includes(inspection.instance.status);
   const noAuthorizedTakeChoices = !isPut && inspection.authorized_inventory.length === 0;
+  const selectedTake = !isPut
+    ? inspection.authorized_inventory.find(item => item.item_id === selectedItemId)
+    : undefined;
   const statusText = inspection.localization.status !== "OK"
     ? "沒有找到清楚的物品，請重新掃描。"
     : noAuthorizedTakeChoices
@@ -368,7 +424,7 @@ function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedIt
             : "AI 候選目前不可取用，請改選你有權限的庫存物品。"
         : isPut ? "這看起來是新物品，可以登記。" : "無法自動對應，請從你可取用的庫存中選擇。";
   const disabled = !inspection.committable || (isPut && !label.trim()) || needsItemChoice(inspection, selectedItemId, addAsNew);
-  const choiceButtons = (choices: typeof primaryChoices) => <div className="action-options">{choices.map(item => <button className={selectedItemId === item.item_id ? "selected" : ""} key={item.item_id} onClick={() => { setSelectedItemId(item.item_id); setAddAsNew(false); }}><div><strong>{item.label}</strong><small>{item.shared ? "共用" : "個人"}</small></div><b>{selectedItemId === item.item_id ? "✓" : "→"}</b></button>)}</div>;
+  const choiceButtons = (choices: typeof primaryChoices) => <div className="action-options">{choices.map(item => <button className={selectedItemId === item.item_id ? "selected" : ""} key={item.item_id} onClick={() => { setSelectedItemId(item.item_id); setAddAsNew(false); }}><div><strong>{takeChoiceTitle(item)}</strong><small>擁有者：{takeChoiceOwner(item)} · 放入：{item.put_at ? formatTime(item.put_at) : "尚無紀錄"} · {item.shared ? "共用" : "私人"}{typeof item.similarity === "number" ? ` · 相似度 ${item.similarity.toFixed(3)}` : ""}</small></div><b>{selectedItemId === item.item_id ? "✓" : "→"}</b></button>)}</div>;
   const toggleShareUser = (userId: string) => setShareUserIds(
     shareUserIds.includes(userId)
       ? shareUserIds.filter(value => value !== userId)
@@ -379,13 +435,14 @@ function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedIt
     <h2>確認辨識結果</h2>
     <div className="recognized-user"><div className="avatar success">{inspection.identity.display_name.slice(0, 1)}</div><div><span>已再次確認身分</span><strong>{inspection.identity.display_name}</strong></div><b>✓</b></div>
     {inspection.review_decision === "WARN_NOT_OWNER"
-      ? <div className="warning-card"><b>!</b><div><strong>WARN_NOT_OWNER · 這是別人的個人物品</strong><p>無法取出這件物品；若 AI 判斷錯誤，只能改選你有權限的庫存。</p></div></div>
+      ? <div className="warning-card"><b>!</b><div><strong>WARN_NOT_OWNER · 這是別人的個人物品</strong><p>無法取出這件物品；若 AI 判斷錯誤，只能改選你有權限的庫存。</p><button className="secondary-button" onClick={() => void onPlayWarning()}>🔊 播放警示音</button></div></div>
       : <p className="rag-hint">{inspection.review_message ?? statusText}</p>}
     {inspection.category.top3.length > 0 && <><p className="review-label">AI 名稱建議</p><div className="suggestions">{inspection.category.top3.map(entry => <button key={entry.label} onClick={() => isPut && setLabel(entry.label)}>{entry.label} {Math.round(entry.score * 100)}%</button>)}</div></>}
     {inspection.category.status === "UNKNOWN_CATEGORY" && <p className="rag-hint">AI 不確定名稱；這不會阻止放入，請自行修正。</p>}
     {isPut && <><label htmlFor="item-label">物品名稱</label><div className="date-input"><span>✎</span><input id="item-label" value={label} onChange={event => setLabel(event.target.value)} placeholder="請輸入你要保存的名稱" /></div></>}
     {primaryChoices.length > 0 && <><p className="review-label">{!isPut && inspection.instance.status === "NO_MATCH" ? "選擇要取出的授權庫存" : "AI 建議的對應物品"}</p>{choiceButtons(primaryChoices)}</>}
     {canCorrectTake && <details><summary>AI 結果不對—改選其他有權限的物品</summary>{manualAlternatives.length > 0 ? choiceButtons(manualAlternatives) : <p className="rag-hint">目前沒有其他有權限且仍在冰箱內的物品。</p>}</details>}
+    {selectedTake && <div className="selected-inventory-confirm"><span>即將取出</span><strong>{takeChoiceTitle(selectedTake)}</strong><small>擁有者：{takeChoiceOwner(selectedTake)}</small></div>}
     {noAuthorizedTakeChoices && <p className="rag-hint">沒有可選物品，確認按鈕已停用；庫存不會被修改。</p>}
     {isPut && <button className={addAsNew ? "chip selected" : "chip"} onClick={() => { setAddAsNew(true); setSelectedItemId(""); }}>＋ 這是不同／新的物品</button>}
     {isPut && <>

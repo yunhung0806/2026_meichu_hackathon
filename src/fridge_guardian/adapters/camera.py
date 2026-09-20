@@ -19,7 +19,8 @@ class OpenCVCamera:
             self.capture = cv2.VideoCapture(camera_index)
         if not self.capture.isOpened():
             raise CameraError(
-                f"Cannot open camera index {camera_index}. Check Windows camera permission and --camera-index."
+                f"Cannot open camera index {camera_index}. Check camera permissions, "
+                "close other camera applications, and verify FRIDGE_CAMERA_INDEX."
             )
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
