@@ -313,5 +313,5 @@ recognition quality.
 - Shared access is represented by `item_shares` and fully handled by policy,
   but this MVP intentionally has no sharing-management interface.
 
-  #Demo Video
+  # Demo Video
   https://youtu.be/seYQtj5ShR0?si=e0McMZB20vlgNtHt
