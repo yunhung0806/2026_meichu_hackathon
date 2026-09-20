@@ -312,3 +312,6 @@ recognition quality.
   `UV_CACHE_DIR` set to the repository-local `.uv-cache` as shown above.
 - Shared access is represented by `item_shares` and fully handled by policy,
   but this MVP intentionally has no sharing-management interface.
+
+  #Demo Video
+  https://youtu.be/seYQtj5ShR0?si=e0McMZB20vlgNtHt
