@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { InventoryItem } from "../lib/api.ts";
-import { canEditInventoryItem, groupInventoryItems, inventorySharingLabel, saveInventoryEdit, takeChoiceOwner, takeChoiceTitle } from "../lib/inventory-view.ts";
+import { canEditInventoryItem, groupInventoryItems, inventorySharingLabel, isSharedInventoryItem, saveInventoryEdit, takeChoiceOwner, takeChoiceTitle } from "../lib/inventory-view.ts";
 
 function item(overrides: Partial<InventoryItem>): InventoryItem {
   return {
@@ -53,6 +53,13 @@ test("management sharing labels distinguish public, direct, and private access",
   assert.equal(inventorySharingLabel(item({ shared: false, access_type: "PRIVATE_VISIBLE" })), "私人");
   assert.equal(canEditInventoryItem(item({ can_edit: true })), true);
   assert.equal(canEditInventoryItem(item({ can_edit: false })), false);
+});
+
+test("shared dashboard count includes both owner and recipient views", () => {
+  assert.equal(isSharedInventoryItem(item({ shared: true })), true);
+  assert.equal(isSharedInventoryItem(item({ shared_user_ids: ["user-b"], shared_user_names: ["B"] })), true);
+  assert.equal(isSharedInventoryItem(item({ access_type: "SHARED_DIRECT", can_edit: false })), true);
+  assert.equal(isSharedInventoryItem(item({ access_type: "PRIVATE_VISIBLE", can_edit: false })), false);
 });
 
 test("successful edit refreshes inventory and failed edit does not", async () => {

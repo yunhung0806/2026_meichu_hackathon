@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { stationApi } from "@/lib/api";
 import type { HistoryEvent, IdentifiedUser, InventoryItem, ItemInspection, Member, OperationResult, QuestionAnswer } from "@/lib/api";
-import { canEditInventoryItem, groupInventoryItems, inventorySharingLabel, saveInventoryEdit, takeChoiceOwner, takeChoiceTitle } from "@/lib/inventory-view";
+import { canEditInventoryItem, groupInventoryItems, inventorySharingLabel, isSharedInventoryItem, saveInventoryEdit, takeChoiceOwner, takeChoiceTitle } from "@/lib/inventory-view";
 import RecipeView from "./recipe-view";
 
 type Tab = "home" | "items" | "recipes" | "history" | "ask";
@@ -92,6 +92,9 @@ export default function Home() {
   }
 
   async function scanItem(action: "PUT_IN" | "TAKE_OUT") {
+    if (action === "TAKE_OUT") {
+      try { stationApi.armWarningAudio(); } catch { /* A visible replay button remains available. */ }
+    }
     setError("");
     setLabel("");
     setSelectedItemId("");
@@ -103,7 +106,11 @@ export default function Home() {
       const next = await stationApi.inspect(action);
       setInspection(next);
       if (next.review_decision === "WARN_NOT_OWNER") {
-        void stationApi.playWarningAudio().catch(() => undefined);
+        try {
+          await stationApi.playWarningAudio();
+        } catch {
+          setError("警示音未能自動播放，請按「播放警示音」。");
+        }
       }
       setLabel(next.suggested_label);
       if (action === "PUT_IN") {
@@ -180,7 +187,7 @@ export default function Home() {
       {flow === "enrolling" && <Recognizing text="正在建立你的人臉資料" enrollment />}
       {flow === "menu" && user && <ActionMenu user={user} onPut={() => void scanItem("PUT_IN")} onTake={() => void scanItem("TAKE_OUT")} />}
       {flow === "scanning" && <Recognizing text="正在掃描物品，此階段不會修改庫存" />}
-      {flow === "review" && inspection && <ReviewItem inspection={inspection} label={label} setLabel={setLabel} selectedItemId={selectedItemId} setSelectedItemId={setSelectedItemId} addAsNew={addAsNew} setAddAsNew={setAddAsNew} members={members} shareUserIds={shareUserIds} setShareUserIds={setShareUserIds} expiry={expiry} setExpiry={setExpiry} error={error} onConfirm={() => void commitInspection()} onRescan={() => void scanItem(inspection.action)} />}
+      {flow === "review" && inspection && <ReviewItem inspection={inspection} label={label} setLabel={setLabel} selectedItemId={selectedItemId} setSelectedItemId={setSelectedItemId} addAsNew={addAsNew} setAddAsNew={setAddAsNew} members={members} shareUserIds={shareUserIds} setShareUserIds={setShareUserIds} expiry={expiry} setExpiry={setExpiry} error={error} onPlayWarning={async () => { try { await stationApi.playWarningAudio(); setError(""); } catch (cause) { setError(cause instanceof Error ? cause.message : "無法播放警示音。"); } }} onConfirm={() => void commitInspection()} onRescan={() => void scanItem(inspection.action)} />}
       {flow === "committing" && <Recognizing text="正在確認並更新庫存" />}
       {flow === "result" && result && <ResultView result={result} onDone={closeFlow} />}
       {flow === "error" && <ErrorView message={error} onRetry={beginRecognition} />}
@@ -226,7 +233,7 @@ function CameraPreview({ guidance }: { guidance: string }) {
 
 function HomeView({ inventory, online, user, onStart, onEnroll, onTab }: { inventory: InventoryItem[]; online: boolean; user: IdentifiedUser | null; onStart: () => void; onEnroll: () => void; onTab: (tab: Tab) => Promise<void> }) {
   const expiring = inventory.filter(item => item.expires_on).length;
-  const shared = inventory.filter(item => Boolean(item.shared)).length;
+  const shared = inventory.filter(isSharedInventoryItem).length;
   return <div className="page-grid"><section className="hero-card"><div className="hero-copy"><h2>{user ? `你好，${user.display_name}` : "請登入以繼續使用"}</h2><p>{user ? "歡迎回來，選擇放入或取出物品開始使用。" : "站到鏡頭前，讓冰友辨識你並載入專屬庫存。"}</p><div className="identity-actions"><button className="primary-button" onClick={onStart} disabled={!online}><span className="scan-icon">◎</span>{online ? (user ? "重新辨識使用者" : "開始人臉辨識") : "等待本機 API"}<b>→</b></button><button className="secondary-button" onClick={onEnroll} disabled={!online}><span>＋</span>我是新人</button></div></div><div className="camera-visual" aria-hidden="true"><div className="camera-ring smart-core"><span className="orbit orbit-one"></span><span className="orbit orbit-two"></span><span className="orbit orbit-three"></span><div className="smart-fridge"><span className="ai-lens"><i></i></span><b></b><em></em></div><div className="signal-ring signal-one"></div><div className="signal-ring signal-two"></div><span className="scan-sweep"></span></div></div></section><section className="home-hub" aria-label="冰箱快速入口"><DashboardCard className="inventory-tile" icon="▦" eyebrow="INVENTORY" label="目前庫存" value={inventory.length} detail="查看所有已登記物品" onClick={() => void onTab("items")} /><DashboardCard className="expiry-tile" icon="◷" eyebrow="EXPIRY" label="有期限紀錄" value={expiring} detail="掌握需要優先處理的食物" onClick={() => void onTab("items")} /><DashboardCard className="shared-tile" icon="♙" eyebrow="SHARED" label="共用物品" value={shared} detail="每位成員都能安心取用" onClick={() => void onTab("items")} /><button className="dashboard-card ask-tile" onClick={() => void onTab("ask")}><span className="dashboard-icon">✦</span><span className="dashboard-copy"><small>FOODKEEPER RAG</small><strong>問問你的冰箱</strong><em>依真實庫存與保存指引回答你的問題</em></span><span className="card-arrow">開始提問 →</span></button></section></div>;
 }
 
@@ -377,13 +384,13 @@ function needsItemChoice(inspection: ItemInspection, selectedItemId: string, add
   return !selectedItemId;
 }
 
-function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedItemId, addAsNew, setAddAsNew, members, shareUserIds, setShareUserIds, expiry, setExpiry, error, onConfirm, onRescan }: {
+function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedItemId, addAsNew, setAddAsNew, members, shareUserIds, setShareUserIds, expiry, setExpiry, error, onPlayWarning, onConfirm, onRescan }: {
   inspection: ItemInspection; label: string; setLabel: (value: string) => void;
   selectedItemId: string; setSelectedItemId: (value: string) => void;
   addAsNew: boolean; setAddAsNew: (value: boolean) => void;
   members: Member[]; shareUserIds: string[]; setShareUserIds: (value: string[]) => void;
   expiry: string; setExpiry: (value: string) => void;
-  error: string; onConfirm: () => void; onRescan: () => void;
+  error: string; onPlayWarning: () => Promise<void>; onConfirm: () => void; onRescan: () => void;
 }) {
   const isPut = inspection.action === "PUT_IN";
   const aiChoices = inspection.instance.candidates;
@@ -428,7 +435,7 @@ function ReviewItem({ inspection, label, setLabel, selectedItemId, setSelectedIt
     <h2>確認辨識結果</h2>
     <div className="recognized-user"><div className="avatar success">{inspection.identity.display_name.slice(0, 1)}</div><div><span>已再次確認身分</span><strong>{inspection.identity.display_name}</strong></div><b>✓</b></div>
     {inspection.review_decision === "WARN_NOT_OWNER"
-      ? <div className="warning-card"><b>!</b><div><strong>WARN_NOT_OWNER · 這是別人的個人物品</strong><p>無法取出這件物品；若 AI 判斷錯誤，只能改選你有權限的庫存。</p></div></div>
+      ? <div className="warning-card"><b>!</b><div><strong>WARN_NOT_OWNER · 這是別人的個人物品</strong><p>無法取出這件物品；若 AI 判斷錯誤，只能改選你有權限的庫存。</p><button className="secondary-button" onClick={() => void onPlayWarning()}>🔊 播放警示音</button></div></div>
       : <p className="rag-hint">{inspection.review_message ?? statusText}</p>}
     {inspection.category.top3.length > 0 && <><p className="review-label">AI 名稱建議</p><div className="suggestions">{inspection.category.top3.map(entry => <button key={entry.label} onClick={() => isPut && setLabel(entry.label)}>{entry.label} {Math.round(entry.score * 100)}%</button>)}</div></>}
     {inspection.category.status === "UNKNOWN_CATEGORY" && <p className="rag-hint">AI 不確定名稱；這不會阻止放入，請自行修正。</p>}

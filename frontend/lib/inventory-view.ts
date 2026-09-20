@@ -48,6 +48,12 @@ export function inventorySharingLabel(item: InventoryItem): string {
   return "私人";
 }
 
+export function isSharedInventoryItem(item: InventoryItem): boolean {
+  return item.shared
+    || item.shared_user_ids.length > 0
+    || item.access_type === "SHARED_DIRECT";
+}
+
 export function canEditInventoryItem(item: InventoryItem): boolean {
   return item.can_edit;
 }
