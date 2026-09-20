@@ -20,7 +20,7 @@ cloud, PIN, upload, history, reminder, or LLM generation APIs exist.
   memory and are never accepted from or returned to the browser.
 - A successful identification returns the existing five-minute
   `FridgeService` bearer token. Tokens are memory-only and disappear on restart.
-- CORS defaults to explicit local origins on ports 3000 and 5173. Override them
+- CORS defaults to explicit local origins on ports 3000, 3001, and 5173. Override them
   with a comma-separated `FRIDGE_FRONTEND_ORIGINS`; wildcard and non-loopback
   origins are rejected.
 - This local recognition session is not liveness-protected authentication.

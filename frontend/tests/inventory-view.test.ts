@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { describeStationPageFailure, StationApiError } from "../lib/api.ts";
 import type { InventoryItem } from "../lib/api.ts";
 import { canEditInventoryItem, groupInventoryItems, inventorySharingLabel, isSharedInventoryItem, saveInventoryEdit, takeChoiceOwner, takeChoiceTitle } from "../lib/inventory-view.ts";
 
@@ -78,4 +79,21 @@ test("successful edit refreshes inventory and failed edit does not", async () =>
     /save failed/,
   );
   assert.equal(calls.includes("unexpected refresh"), false);
+});
+
+test("expired login becomes a re-identification notice instead of an operation error", () => {
+  assert.deepEqual(
+    describeStationPageFailure(new StationApiError("UNAUTHORIZED", "Identify your face again")),
+    {
+      requiresLogin: true,
+      message: "登入已逾時或後端已重新啟動，請重新進行人臉辨識。",
+    },
+  );
+});
+
+test("ordinary page loading errors stay on the page", () => {
+  assert.deepEqual(describeStationPageFailure(new Error("history unavailable")), {
+    requiresLogin: false,
+    message: "history unavailable",
+  });
 });

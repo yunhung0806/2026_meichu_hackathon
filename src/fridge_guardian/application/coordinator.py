@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from unicodedata import normalize
 from uuid import uuid4
 
 from fridge_guardian.application.policy import ownership_decision
@@ -20,6 +21,18 @@ from fridge_guardian.domain import (
 
 class EnrollmentError(RuntimeError):
     pass
+
+
+class DuplicateDisplayNameError(EnrollmentError):
+    pass
+
+
+def _clean_display_name(value: str) -> str:
+    return " ".join(normalize("NFKC", value).split())
+
+
+def _display_name_key(value: str) -> str:
+    return _clean_display_name(value).casefold()
 
 
 class SessionCoordinator:
@@ -46,11 +59,22 @@ class SessionCoordinator:
             raise ValueError("Face and item frames must belong to one session_id")
         return frames[0].session_id
 
-    def enroll_user(self, display_name: str, frames: Sequence[FrameSample]) -> User:
-        session_id = self._session_id(frames)
-        clean_name = display_name.strip()
+    def validate_new_user_name(self, display_name: str) -> str:
+        clean_name = _clean_display_name(display_name)
         if not clean_name:
             raise EnrollmentError("Display name cannot be empty")
+        if any(
+            _display_name_key(user.display_name) == _display_name_key(clean_name)
+            for user in self.repository.list_users()
+        ):
+            raise DuplicateDisplayNameError(
+                f'Display name "{clean_name}" is already in use.'
+            )
+        return clean_name
+
+    def enroll_user(self, display_name: str, frames: Sequence[FrameSample]) -> User:
+        clean_name = self.validate_new_user_name(display_name)
+        session_id = self._session_id(frames)
         extraction = self.identity_provider.extract_templates(session_id, frames)
         required = self.identity_provider.minimum_enrollment_templates
         if len(extraction.templates) < required:
